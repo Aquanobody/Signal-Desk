@@ -102,8 +102,8 @@
     padding:0 12px 8px 12px; border-bottom:1px solid var(--border-soft); margin-bottom:2px;
   }
   .wl-header span{
-    font-family:var(--mono); font-size:13px; letter-spacing:0.5px; color:var(--text-faint);
-    text-transform:uppercase; text-align:right;
+    font-family:var(--mono); font-size:11px; letter-spacing:0.2px; color:var(--text-faint);
+    text-transform:uppercase; text-align:right; white-space:nowrap;
   }
   .wl-header span:first-child{text-align:left;}
   .coin-row{
@@ -309,8 +309,8 @@
     <div class="wl-header wl-grid">
       <span>Coin</span>
       <span>Last Price</span>
-      <span>% Yesterday</span>
-      <span>% Today</span>
+      <span>Yday %</span>
+      <span>Today %</span>
       <span></span>
     </div>
     <div id="watchlist" style="display:flex; flex-direction:column; gap:1px;"></div>
@@ -376,8 +376,12 @@
   <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
     <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:14px; cursor:pointer;">
       <input type="checkbox" id="scanSmaDiffEnabled" style="accent-color:#E8B94D; width:15px; height:15px;">
-      |RSI−SMA(14)| ≤
+      |RSI−SMA(14)|
     </label>
+    <select id="scanSmaDiffDir" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:13.5px;">
+      <option value="below">≤</option>
+      <option value="above">≥</option>
+    </select>
     <input id="scanSmaDiffValue" type="number" step="any" value="7" style="width:56px; background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:7px 9px; border-radius:7px; font-family:var(--mono); font-size:14px;">
     <span style="color:var(--text-faint);">|</span>
     <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:14px; cursor:pointer;">
@@ -569,7 +573,7 @@ async function sendTelegram(text){
 }
 
 let watchlist = ["BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","OKB-USDT"];
-let scanConfig = { enabled:false, conditions:[{bar:'1D', dir:'above', value:85}], limit:150, smaDiffEnabled:false, smaDiffValue:7, smaConditions:[], ydayPctEnabled:true, ydayPctValue:20, logic:'or' };
+let scanConfig = { enabled:false, conditions:[{bar:'1D', dir:'above', value:85}], limit:150, smaDiffEnabled:false, smaDiffDir:'below', smaDiffValue:7, smaConditions:[], ydayPctEnabled:true, ydayPctValue:20, logic:'or' };
 let scanArmed = {};
 let scanResults = [];
 let scanning = false;
@@ -1166,7 +1170,9 @@ async function scanMarket(){
       if(smaVal == null){ hit = false; }
       else{
         diff = Math.abs(val - smaVal);
-        if(diff > scanConfig.smaDiffValue) hit = false;
+        const diffDir = scanConfig.smaDiffDir || 'below';
+        const diffOk = diffDir === 'above' ? (diff >= scanConfig.smaDiffValue) : (diff <= scanConfig.smaDiffValue);
+        if(!diffOk) hit = false;
       }
     }
     if(!rsiByInst[inst]) rsiByInst[inst] = {};
@@ -1351,8 +1357,12 @@ function notifyScanHits(results){
         return `${instLabel(r.inst)} (%Yesterday ≥ ${r.value}%) +${r.pct.toFixed(2)}%`;
       }
       if(r.type === 'and-combo'){
+        const diffDir = scanConfig.smaDiffDir || 'below';
         const parts = [
-          ...r.bars.map(b => `${BAR_LABEL[b.bar]||b.bar} RSI ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)})`),
+          ...r.bars.map(b => {
+            const diffPart = (scanConfig.smaDiffEnabled && b.diff != null) ? `, |RSI-SMA| ${diffDir==='above'?'≥':'≤'}${scanConfig.smaDiffValue} (Δ${b.diff.toFixed(1)})` : '';
+            return `${BAR_LABEL[b.bar]||b.bar} RSI ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)}${diffPart})`;
+          }),
           ...(r.smaHits||[]).map(b => `${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})`),
           ...(r.ydayHit ? [`%Yesterday ≥ ${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)`] : [])
         ];
@@ -1365,7 +1375,7 @@ function notifyScanHits(results){
       const diffPart = (scanConfig.smaDiffEnabled && r.diff != null) ? ` (Δ${r.diff.toFixed(1)})` : '';
       return `${instLabel(r.inst)} (${barLabel} ${r.dir==='above'?'≥':'≤'}${r.value}) ${r.rsi.toFixed(1)}${diffPart}`;
     });
-    const smaCond = scanConfig.smaDiffEnabled ? ` and |RSI−SMA(14)| ≤ ${scanConfig.smaDiffValue}` : '';
+    const smaCond = scanConfig.smaDiffEnabled ? ` and |RSI−SMA(14)| ${scanConfig.smaDiffDir==='above'?'≥':'≤'} ${scanConfig.smaDiffValue}` : '';
     const msg = `Found ${newly.length} futures contracts matching condition${smaCond} : \n${lines.join('\n')}`;
     toast(`📡 Found ${newly.length} matching contracts — alert sent to Telegram`);
     beep();
@@ -1388,9 +1398,17 @@ function renderScanResults(){
       </div>`;
     }
     if(r.type === 'and-combo'){
-      const rsiBadges = r.bars.map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-dim); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} RSI ${b.rsi.toFixed(1)}</span>`).join('');
-      const smaBadges = (r.smaHits||[]).map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} SMA ${b.sma.toFixed(1)}</span>`).join('');
-      const ydayBadge = r.ydayHit ? `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">%Yday +${r.ydayHit.pct.toFixed(2)}%</span>` : '';
+      // Badges spell out the threshold that was set for each group, not just the live reading,
+      // so an AND match is legible on its own without cross-checking the condition rows above.
+      const rsiBadges = r.bars.map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-dim); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} RSI ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)})</span>`).join('');
+      const smaBadges = (r.smaHits||[]).map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})</span>`).join('');
+      const ydayBadge = r.ydayHit ? `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">%Yday ≥${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)</span>` : '';
+      // |RSI-SMA(14)| diff was checked per RSI bar (same TF as that RSI condition), so show one
+      // Δ line per bar that carried a diff value, alongside the threshold that was applied.
+      const diffDir = scanConfig.smaDiffDir || 'below';
+      const diffLines = scanConfig.smaDiffEnabled ? r.bars.filter(b => b.diff != null).map(b =>
+        `<span style="color:var(--text-faint); font-size:11px;">${BAR_LABEL[b.bar]||b.bar} Δ${b.diff.toFixed(1)} ${diffDir==='above'?'≥':'≤'}${scanConfig.smaDiffValue} (SMA ${b.sma.toFixed(1)})</span>`
+      ).join('') : '';
       return `<div class="scan-card" data-inst="${r.inst}" title="Open in OKX Futures">
         <span class="sym">${instLabel(r.inst)} <span style="color:var(--text-faint); font-weight:400;">PERP</span></span>
         <div style="display:flex; flex-wrap:wrap; gap:4px;">
@@ -1398,6 +1416,7 @@ function renderScanResults(){
           ${rsiBadges}${smaBadges}${ydayBadge}
         </div>
         <span class="px">${d?fmtPx(d.last):'—'}</span>
+        ${diffLines}
       </div>`;
     }
     const barLabel = BAR_LABEL[r.bar] || r.bar;
@@ -1542,6 +1561,7 @@ function syncScanUI(){
   renderSmaConditionRows();
   document.getElementById('scanLimit').value = scanConfig.limit;
   document.getElementById('scanSmaDiffEnabled').checked = !!scanConfig.smaDiffEnabled;
+  document.getElementById('scanSmaDiffDir').value = scanConfig.smaDiffDir || 'below';
   document.getElementById('scanSmaDiffValue').value = scanConfig.smaDiffValue != null ? scanConfig.smaDiffValue : 7;
   document.getElementById('scanYdayPctEnabled').checked = !!scanConfig.ydayPctEnabled;
   document.getElementById('scanYdayPctValue').value = scanConfig.ydayPctValue != null ? scanConfig.ydayPctValue : 20;
@@ -1550,6 +1570,7 @@ async function onScanConfigChange(){
   scanConfig.enabled = document.getElementById('scanEnabled').checked;
   scanConfig.limit = parseInt(document.getElementById('scanLimit').value) || 150;
   scanConfig.smaDiffEnabled = document.getElementById('scanSmaDiffEnabled').checked;
+  scanConfig.smaDiffDir = document.getElementById('scanSmaDiffDir').value;
   scanConfig.smaDiffValue = parseFloat(document.getElementById('scanSmaDiffValue').value) || 7;
   scanConfig.ydayPctEnabled = document.getElementById('scanYdayPctEnabled').checked;
   scanConfig.ydayPctValue = parseFloat(document.getElementById('scanYdayPctValue').value) || 20;
@@ -1576,7 +1597,7 @@ document.getElementById('scanBarGroup').addEventListener('click', e=>{
   scanArmed = {};
   saveScanConfig();
 });
-['scanEnabled','scanLimit','scanSmaDiffEnabled','scanSmaDiffValue','scanYdayPctEnabled','scanYdayPctValue'].forEach(id=>{
+['scanEnabled','scanLimit','scanSmaDiffEnabled','scanSmaDiffDir','scanSmaDiffValue','scanYdayPctEnabled','scanYdayPctValue'].forEach(id=>{
   document.getElementById(id).addEventListener('change', onScanConfigChange);
 });
 document.getElementById('scanLogicGroup').addEventListener('click', e=>{
