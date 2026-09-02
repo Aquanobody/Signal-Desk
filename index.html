@@ -1115,6 +1115,7 @@ async function scanMarket(){
   const failed = [];
   const rsiByInst = {}; // inst -> { [bar]: {hit, val, sma, diff, dir, value} } — filled in first, results assembled after per OR/AND mode
   const smaByInst = {}; // inst -> { [bar]: {hit, sma, dir, value} } — SMA(14)-of-RSI value condition results
+  const ydayByInst = {}; // inst -> {hit, pct, value} — %Yesterday condition result, assembled after (like the others)
   let done = 0;
   const concurrency = 3;
   let cursor = 0;
@@ -1126,7 +1127,7 @@ async function scanMarket(){
       const yCandle = arr[arr.length-2]; // last fully-closed daily candle
       if(!yCandle || !yCandle.o) throw new Error('no yesterday candle');
       const pct = (yCandle.c - yCandle.o)/yCandle.o*100;
-      if(pct >= value) results.push({ inst, bar, type:'ydaypct', value, pct });
+      ydayByInst[inst] = { hit: pct >= value, pct, value };
       return;
     }
     if(task.type === 'smaval'){
@@ -1206,46 +1207,71 @@ async function scanMarket(){
     stillFailed = retryFailed;
   }
 
-  // assemble RSI results from rsiByInst per the selected logic mode
+  // assemble results per the selected logic mode. Every enabled filter — each RSI-per-TF condition,
+  // each SMA(14)-of-RSI condition, and the %Yesterday condition — is one "group". In AND mode all
+  // enabled groups must hit together for the same instrument (this used to only apply across multiple
+  // RSI timeframes; the SMA/%Yesterday groups were always OR'd in separately, which is why AND mode
+  // looked like it was showing coins "split apart" instead of coins matching everything at once).
   const logicMode = (scanConfig.logic === 'and') ? 'and' : 'or';
-  if(logicMode === 'and' && conditions.length > 1){
-    // AND: an instrument only counts if EVERY selected TF condition hit simultaneously
+  const totalGroups = conditions.length + smaConditions.length + (scanConfig.ydayPctEnabled ? 1 : 0);
+
+  if(logicMode === 'and' && totalGroups > 1){
+    // AND across every enabled group (RSI TFs + SMA TFs + %Yesterday) simultaneously
     for(const inst of universe){
-      const map = rsiByInst[inst];
-      if(!map) continue;
       let allHit = true;
       const bars = [];
+      let smaHits = [];
+      let ydayHit = null;
+
       for(const cond of conditions){
-        const r = map[cond.bar];
+        const r = rsiByInst[inst] && rsiByInst[inst][cond.bar];
         if(!r || !r.hit){ allHit = false; break; }
         bars.push({ bar: cond.bar, dir: cond.dir, value: cond.value, rsi: r.val, sma: r.sma, diff: r.diff });
       }
-      if(allHit) results.push({ inst, type:'rsi-and', bars });
+      if(allHit){
+        for(const cond of smaConditions){
+          const r = smaByInst[inst] && smaByInst[inst][cond.bar];
+          if(!r || !r.hit){ allHit = false; break; }
+          smaHits.push({ bar: cond.bar, dir: cond.dir, value: cond.value, sma: r.sma });
+        }
+      }
+      if(allHit && scanConfig.ydayPctEnabled){
+        const r = ydayByInst[inst];
+        if(!r || !r.hit){ allHit = false; }
+        else ydayHit = { value: r.value, pct: r.pct };
+      }
+
+      if(allHit) results.push({ inst, type:'and-combo', bars, smaHits, ydayHit });
     }
   }else{
-    // OR (default): any instrument matching any single TF condition counts, one entry per matching TF
+    // OR (default), or AND with only a single group enabled: any instrument matching any single
+    // condition counts, one entry per matching condition (existing behaviour, unchanged)
     for(const inst of universe){
       const map = rsiByInst[inst];
-      if(!map) continue;
-      for(const cond of conditions){
-        const r = map[cond.bar];
-        if(r && r.hit) results.push({ inst, bar: cond.bar, type:'rsi', dir: cond.dir, value: cond.value, rsi: r.val, sma: r.sma, diff: r.diff });
+      if(map){
+        for(const cond of conditions){
+          const r = map[cond.bar];
+          if(r && r.hit) results.push({ inst, bar: cond.bar, type:'rsi', dir: cond.dir, value: cond.value, rsi: r.val, sma: r.sma, diff: r.diff });
+        }
       }
     }
-  }
-
-  // SMA(14)-of-RSI value conditions — an independent OR pass across whichever TFs were selected,
-  // same treatment as the yesterday-% pass rather than mixed into the RSI AND/OR logic above
-  for(const cond of smaConditions){
-    for(const inst of universe){
-      const r = smaByInst[inst] && smaByInst[inst][cond.bar];
-      if(r && r.hit) results.push({ inst, bar: cond.bar, type:'smaval', dir: cond.dir, value: cond.value, sma: r.sma });
+    for(const cond of smaConditions){
+      for(const inst of universe){
+        const r = smaByInst[inst] && smaByInst[inst][cond.bar];
+        if(r && r.hit) results.push({ inst, bar: cond.bar, type:'smaval', dir: cond.dir, value: cond.value, sma: r.sma });
+      }
+    }
+    if(scanConfig.ydayPctEnabled){
+      for(const inst of universe){
+        const r = ydayByInst[inst];
+        if(r && r.hit) results.push({ inst, bar:'1D', type:'ydaypct', value: r.value, pct: r.pct });
+      }
     }
   }
 
   // group by TF (in the order the conditions are defined) so each timeframe's results sort by its own direction;
   // yesterday-%-change results (no TF grouping concept) sort to the end, highest % first;
-  // AND-mode combined results keep universe (volume-desc) order since they don't belong to a single TF
+  // AND-combo results keep universe (volume-desc) order since they don't belong to a single TF
   const barRank = {};
   conditions.forEach((c,i)=>{ barRank[c.bar] = i; });
   smaConditions.forEach((c,i)=>{ if(!(c.bar in barRank)) barRank[c.bar] = conditions.length + i; });
@@ -1254,7 +1280,7 @@ async function scanMarket(){
     if(a.type === 'ydaypct' && b.type === 'ydaypct') return b.pct - a.pct;
     if(a.type === 'ydaypct') return 1;
     if(b.type === 'ydaypct') return -1;
-    if(a.type === 'rsi-and' && b.type === 'rsi-and') return universeRank[a.inst] - universeRank[b.inst];
+    if(a.type === 'and-combo' && b.type === 'and-combo') return universeRank[a.inst] - universeRank[b.inst];
     if(barRank[a.bar] !== barRank[b.bar]) return barRank[a.bar] - barRank[b.bar];
     if(a.type === 'smaval' || b.type === 'smaval'){
       if(a.type !== b.type) return a.type === 'smaval' ? 1 : -1;
@@ -1270,14 +1296,15 @@ async function scanMarket(){
   scanning = false;
   setScanProgress(null);
   const failNote = stillFailed.length ? ` · ${stillFailed.length} items failed to fetch (not counted as "no match")` : '';
-  const tfNote = conditions.length > 1
-    ? ` · TF(${logicMode==='and'?'AND':'OR'}): ${conditions.map(c=>`${BAR_LABEL[c.bar]||c.bar}(${c.dir==='above'?'≥':'≤'}${c.value})`).join(', ')}`
+  const modeNote = (totalGroups > 1) ? ` · Mode: ${logicMode==='and'?'AND (all conditions must match together)':'OR'}` : '';
+  const tfNote = conditions.length
+    ? ` · RSI(14): ${conditions.map(c=>`${BAR_LABEL[c.bar]||c.bar}(${c.dir==='above'?'≥':'≤'}${c.value})`).join(', ')}`
     : '';
   const smaValNote = smaConditions.length
     ? ` · SMA(14): ${smaConditions.map(c=>`${BAR_LABEL[c.bar]||c.bar}(${c.dir==='above'?'≥':'≤'}${c.value})`).join(', ')}`
     : '';
   const ydayNote = scanConfig.ydayPctEnabled ? ` · %Yesterday≥${scanConfig.ydayPctValue}%` : '';
-  setScanStatus(`Last scan ${new Date().toLocaleTimeString('en-US',{hour12:false})} · ${universe.length} contracts${tfNote}${smaValNote}${ydayNote} · found ${results.length} items${failNote}`);
+  setScanStatus(`Last scan ${new Date().toLocaleTimeString('en-US',{hour12:false})} · ${universe.length} contracts${modeNote}${tfNote}${smaValNote}${ydayNote} · found ${results.length} items${failNote}`);
   if(stillFailed.length){
     console.warn('Instrument/TF pairs that could not be scanned (data fetch failed twice):', stillFailed);
   }
@@ -1306,7 +1333,12 @@ async function addScanResultsToWatchlist(results){
 }
 
 function armKey(r){
-  if(r.type === 'rsi-and') return `${r.inst}|AND|${r.bars.map(b=>b.bar).join(',')}`;
+  if(r.type === 'and-combo'){
+    const rsiKeys = r.bars.map(b=>`rsi:${b.bar}`);
+    const smaKeys = (r.smaHits||[]).map(b=>`sma:${b.bar}`);
+    const ydayKey = r.ydayHit ? ['yday'] : [];
+    return `${r.inst}|AND|${[...rsiKeys, ...smaKeys, ...ydayKey].join(',')}`;
+  }
   return `${r.inst}|${r.bar}|${r.type||'rsi'}`;
 }
 function notifyScanHits(results){
@@ -1318,9 +1350,13 @@ function notifyScanHits(results){
       if(r.type === 'ydaypct'){
         return `${instLabel(r.inst)} (%Yesterday ≥ ${r.value}%) +${r.pct.toFixed(2)}%`;
       }
-      if(r.type === 'rsi-and'){
-        const parts = r.bars.map(b => `${BAR_LABEL[b.bar]||b.bar} ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)})`);
-        return `${instLabel(r.inst)} [AND all TF] ${parts.join(' & ')}`;
+      if(r.type === 'and-combo'){
+        const parts = [
+          ...r.bars.map(b => `${BAR_LABEL[b.bar]||b.bar} RSI ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)})`),
+          ...(r.smaHits||[]).map(b => `${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})`),
+          ...(r.ydayHit ? [`%Yesterday ≥ ${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)`] : [])
+        ];
+        return `${instLabel(r.inst)} [AND] ${parts.join(' & ')}`;
       }
       const barLabel = BAR_LABEL[r.bar] || r.bar;
       if(r.type === 'smaval'){
@@ -1351,13 +1387,15 @@ function renderScanResults(){
         <span class="px">${d?fmtPx(d.last):'—'}</span>
       </div>`;
     }
-    if(r.type === 'rsi-and'){
-      const badges = r.bars.map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-dim); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} ${b.rsi.toFixed(1)}</span>`).join('');
+    if(r.type === 'and-combo'){
+      const rsiBadges = r.bars.map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-dim); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} RSI ${b.rsi.toFixed(1)}</span>`).join('');
+      const smaBadges = (r.smaHits||[]).map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} SMA ${b.sma.toFixed(1)}</span>`).join('');
+      const ydayBadge = r.ydayHit ? `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">%Yday +${r.ydayHit.pct.toFixed(2)}%</span>` : '';
       return `<div class="scan-card" data-inst="${r.inst}" title="Open in OKX Futures">
         <span class="sym">${instLabel(r.inst)} <span style="color:var(--text-faint); font-weight:400;">PERP</span></span>
         <div style="display:flex; flex-wrap:wrap; gap:4px;">
-          <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">AND</span>
-          ${badges}
+          <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">AND</span>
+          ${rsiBadges}${smaBadges}${ydayBadge}
         </div>
         <span class="px">${d?fmtPx(d.last):'—'}</span>
       </div>`;
