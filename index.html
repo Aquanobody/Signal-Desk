@@ -152,8 +152,9 @@
   }
   .cond-row input{width:64px;}
   #chartWrap{position:relative;}
-  #chartCanvas{width:100%; height:340px; display:block; border-radius:10px; background:#0A0D14; border:1px solid var(--border);}
-  #rsiCanvas{width:100%; height:220px; display:block; border-radius:10px; background:#0A0D14; border:1px solid var(--border); margin-top:6px;}
+  #chartCanvas{width:100%; height:280px; display:block; border-radius:10px; background:#0A0D14; border:1px solid var(--border);}
+  #rsiCanvas{width:100%; height:160px; display:block; border-radius:10px; background:#0A0D14; border:1px solid var(--border); margin-top:6px;}
+  #stochCanvas{width:100%; height:140px; display:block; border-radius:10px; background:#0A0D14; border:1px solid var(--border); margin-top:6px;}
   #chartTooltip{
     position:absolute; display:none; background:rgba(14,18,28,0.95); border:1px solid var(--amber-dim);
     border-radius:8px; padding:8px 11px; font-family:var(--mono); font-size:13px; color:var(--text-dim);
@@ -338,6 +339,7 @@
       <div id="chartTooltip"></div>
     </div>
     <canvas id="rsiCanvas"></canvas>
+    <canvas id="stochCanvas"></canvas>
     <div class="stats-row" id="statsRow"></div>
   </div>
 </div>
@@ -404,6 +406,46 @@
     </div>
   </div>
   <div id="scanSmaConditionsRow" style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; margin-top:10px;"></div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; padding-top:10px; border-top:1px dashed var(--border-soft);">
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px;">Setup conditions</span>
+    <span style="color:var(--text-faint);">|</span>
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">TF</span>
+    <select id="scanComboBar" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:13.5px;">
+      <option value="5m">5m</option>
+      <option value="15m">15m</option>
+      <option value="1H">1H</option>
+      <option value="4H">4H</option>
+      <option value="1D" selected>Day</option>
+      <option value="1W">Week</option>
+    </select>
+    <span style="color:var(--text-faint);">|</span>
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">Breakout lookback</span>
+    <input id="scanComboBreakoutLookback" type="number" step="1" min="10" max="20" value="20" style="width:56px; background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:7px 9px; border-radius:7px; font-family:var(--mono); font-size:14px;">
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">bars (10-20)</span>
+  </div>
+  <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; margin-top:10px;">
+    <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:13.5px; cursor:pointer;" title="20-bar average high-low range narrower than the 60-bar average range">
+      <input type="checkbox" id="scanComboSqueeze" style="accent-color:#E8B94D; width:15px; height:15px;">
+      Squeeze (range20 &lt; range60)
+    </label>
+    <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:13.5px; cursor:pointer;" title="RSI(14) crosses above its own 14-period MA, with RSI between 35-55 at the cross">
+      <input type="checkbox" id="scanComboRsiCross" style="accent-color:#E8B94D; width:15px; height:15px;">
+      RSI(14)×MA(14) cross (35-55)
+    </label>
+    <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:13.5px; cursor:pointer;" title="Stochastic %K crosses above %D while %K is still under 60">
+      <input type="checkbox" id="scanComboStoch" style="accent-color:#E8B94D; width:15px; height:15px;">
+      Stoch %K×%D cross (&lt;60)
+    </label>
+    <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:13.5px; cursor:pointer;" title="Current bar's volume is more than 1.5x its 20-bar average volume">
+      <input type="checkbox" id="scanComboVolSpike" style="accent-color:#E8B94D; width:15px; height:15px;">
+      Volume &gt; 1.5x MA20
+    </label>
+    <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:13.5px; cursor:pointer;" title="Close breaks above the highest high of the prior N bars (breakout confirmation)">
+      <input type="checkbox" id="scanComboBreakout" style="accent-color:#E8B94D; width:15px; height:15px;">
+      Breakout (close &gt; prior N-bar high)
+    </label>
+  </div>
+  <div style="font-family:var(--mono); font-size:11.5px; color:var(--text-faint); margin-top:4px;">Each box above is its own filter — combine them with the OR/AND Mode toggle up top, same as the RSI/SMA/%Yesterday conditions.</div>
   <div>
     <div id="scanProgressWrap"><div id="scanProgressBar"></div></div>
     <div id="scanProgressLabel">0%</div>
@@ -573,7 +615,7 @@ async function sendTelegram(text){
 }
 
 let watchlist = ["BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","OKB-USDT"];
-let scanConfig = { enabled:false, conditions:[{bar:'1D', dir:'above', value:85}], limit:150, smaDiffEnabled:false, smaDiffDir:'below', smaDiffValue:7, smaConditions:[], ydayPctEnabled:true, ydayPctValue:20, logic:'or' };
+let scanConfig = { enabled:false, conditions:[{bar:'1D', dir:'above', value:85}], limit:150, smaDiffEnabled:false, smaDiffDir:'below', smaDiffValue:7, smaConditions:[], ydayPctEnabled:true, ydayPctValue:20, logic:'or', comboBar:'1D', comboBreakoutLookback:20, comboSqueezeEnabled:false, comboRsiCrossEnabled:false, comboStochEnabled:false, comboVolSpikeEnabled:false, comboBreakoutEnabled:false };
 let scanArmed = {};
 let scanResults = [];
 let scanning = false;
@@ -584,10 +626,29 @@ let currentBar = "1H";
 let candles = [];
 let candleCache = {};
 let lastRSI = null;
+let lastStochK = null;
+let lastStochD = null;
 let hoverIndex = null;
 let recentlyAdded = new Set(); // instIds added by the last scan, for the "NEW" badge
 
 const BAR_LABEL = { '5m':'5m', '15m':'15m', '1H':'1H', '4H':'4H', '1D':'1Day', '1W':'1Week' };
+
+// The 5 selectable "Combined Setup" sub-conditions. Each shares one candle fetch/computeComboSignal
+// call per instrument+TF (they're cheap to compute together), but is toggled and matched independently —
+// same shape as the RSI/SMA/%Yesterday groups, so they combine via the existing OR/AND Mode toggle.
+const COMBO_SUBS = [
+  { key:'squeeze', configKey:'comboSqueezeEnabled', label:'Squeeze', hitOf:s=>s.squeezeHit,
+    detail:s=>`range20 ${s.range20.toFixed(4)} < range60 ${s.range60.toFixed(4)}` },
+  { key:'rsicross', configKey:'comboRsiCrossEnabled', label:'RSI×MA cross', hitOf:s=>s.rsiCrossHit,
+    detail:s=>`RSI ${s.rsi.toFixed(1)} × MA ${s.rsiMA.toFixed(1)}` },
+  { key:'stoch', configKey:'comboStochEnabled', label:'Stoch cross', hitOf:s=>s.stochHit,
+    detail:s=>`%K ${s.k.toFixed(1)} × %D ${s.d.toFixed(1)}` },
+  { key:'volspike', configKey:'comboVolSpikeEnabled', label:'Vol spike', hitOf:s=>s.volHit,
+    detail:s=>`Vol ${(s.vol/s.volMA20).toFixed(2)}x MA20` },
+  { key:'breakout', configKey:'comboBreakoutEnabled', label:'Breakout', hitOf:s=>s.breakoutHit,
+    detail:s=>`close ${fmtPx(s.close)} > ${s.breakoutLookback}b high ${fmtPx(s.priorHH)}` },
+];
+function enabledComboSubs(){ return COMBO_SUBS.filter(s => !!scanConfig[s.configKey]); }
 
 // Simple moving average over a nullable series (e.g. RSI values before the warm-up period).
 // Skips nulls when building the rolling window, and only emits a value once `period` real
@@ -626,6 +687,91 @@ function calcRSI(closes, period=14){
   return rsis;
 }
 
+// Stochastic oscillator: raw %K from the highest-high/lowest-low window, then %K and %D
+// are both smoothed SMAs (the classic "slow stochastic" shape most charting tools default to).
+function calcStochastic(highs, lows, closes, kPeriod=14, kSmooth=3, dSmooth=3){
+  const n = closes.length;
+  const rawK = new Array(n).fill(null);
+  for(let i=kPeriod-1; i<n; i++){
+    let hh = -Infinity, ll = Infinity;
+    for(let j=i-kPeriod+1; j<=i; j++){ if(highs[j]>hh) hh=highs[j]; if(lows[j]<ll) ll=lows[j]; }
+    rawK[i] = (hh===ll) ? 50 : (closes[i]-ll)/(hh-ll)*100;
+  }
+  const k = calcSMA(rawK, kSmooth);
+  const d = calcSMA(k, dSmooth);
+  return { k, d };
+}
+
+// Average of `period` values ending at (and including) index i. Returns null if there isn't
+// enough history yet — callers treat that as "warm-up incomplete", same convention as calcRSI/calcSMA.
+function trailingAvg(arr, i, period){
+  if(i - period + 1 < 0) return null;
+  let sum = 0;
+  for(let j=i-period+1; j<=i; j++) sum += arr[j];
+  return sum/period;
+}
+// Highest value of `period` values ending at (and including) index i.
+function trailingMax(arr, i, period){
+  if(i - period + 1 < 0) return null;
+  let m = -Infinity;
+  for(let j=i-period+1; j<=i; j++) if(arr[j]>m) m = arr[j];
+  return m;
+}
+
+// "Combined Setup" scanner — a single fixed AND-combo of 5 classic setup conditions, evaluated
+// on the most recent (possibly still-forming) bar of the given candle series:
+//   1) 20-bar average high-low range narrower than the 60-bar average range (volatility squeeze)
+//   2) RSI(14) just crossed above its own 14-period MA, with RSI between 35-55 at the cross
+//   3) Stochastic %K just crossed above %D while %K is still under 60
+//   4) current bar's volume > 1.5x its 20-bar average volume
+//   5) close breaks above the highest high of the prior `breakoutLookback` bars (breakout confirmation)
+// Returns null if there isn't enough history yet; otherwise an object with the overall `hit`
+// plus each sub-condition's boolean and the underlying readings (for badges/notifications).
+function computeComboSignal(candles, breakoutLookback){
+  const lb = breakoutLookback || 20;
+  const n = candles.length;
+  if(n < Math.max(65, lb+2)) return null;
+  const highs = candles.map(c=>c.h);
+  const lows = candles.map(c=>c.l);
+  const closes = candles.map(c=>c.c);
+  const vols = candles.map(c=>c.vol || 0);
+  const ranges = highs.map((h,idx)=>h-lows[idx]);
+  const i = n-1; // current bar
+
+  const range20 = trailingAvg(ranges, i, 20);
+  const range60 = trailingAvg(ranges, i, 60);
+  if(range20==null || range60==null) return null;
+  const squeezeHit = range20 < range60;
+
+  const rsis = calcRSI(closes, 14);
+  const rsiMA = calcSMA(rsis, 14);
+  const rsiNow = rsis[i], rsiPrev = rsis[i-1], maNow = rsiMA[i], maPrev = rsiMA[i-1];
+  let rsiCrossHit = false;
+  if(rsiNow!=null && rsiPrev!=null && maNow!=null && maPrev!=null){
+    rsiCrossHit = (rsiPrev <= maPrev) && (rsiNow > maNow) && (rsiNow >= 35 && rsiNow <= 55);
+  }
+
+  const { k, d } = calcStochastic(highs, lows, closes, 14, 3, 3);
+  const kNow = k[i], kPrev = k[i-1], dNow = d[i], dPrev = d[i-1];
+  let stochHit = false;
+  if(kNow!=null && kPrev!=null && dNow!=null && dPrev!=null){
+    stochHit = (kPrev <= dPrev) && (kNow > dNow) && (kNow < 60);
+  }
+
+  const volMA20 = trailingAvg(vols, i, 20);
+  const volHit = volMA20!=null && volMA20>0 && vols[i] > 1.5*volMA20;
+
+  const priorHH = trailingMax(highs, i-1, lb); // highest high of the lb bars BEFORE the current one
+  const breakoutHit = priorHH!=null && closes[i] > priorHH;
+
+  const hit = squeezeHit && rsiCrossHit && stochHit && volHit && breakoutHit;
+  return {
+    hit, squeezeHit, rsiCrossHit, stochHit, volHit, breakoutHit,
+    range20, range60, rsi: rsiNow, rsiMA: maNow, k: kNow, d: dNow,
+    vol: vols[i], volMA20, close: closes[i], priorHH, breakoutLookback: lb
+  };
+}
+
 // OKX's plain "1D"/"1W"/etc bars use Hong Kong time (UTC+8) as the day boundary.
 // Most charting tools (e.g. TradingView's default) use UTC day boundaries instead.
 // During fast moves this can meaningfully shift the still-forming "today" candle's
@@ -643,7 +789,7 @@ async function getCandles(inst, bar, forceFresh){
   try{
     const json = await okxFetchJson(OKX_CANDLES(inst,toOkxBar(bar)));
     if(json.code !== "0") throw new Error("api error");
-    const arr = json.data.map(x=>({t:parseInt(x[0]), o:parseFloat(x[1]), h:parseFloat(x[2]), l:parseFloat(x[3]), c:parseFloat(x[4])})).reverse();
+    const arr = json.data.map(x=>({t:parseInt(x[0]), o:parseFloat(x[1]), h:parseFloat(x[2]), l:parseFloat(x[3]), c:parseFloat(x[4]), vol:parseFloat(x[5])})).reverse();
     candleCache[key] = {candles:arr, ts:Date.now()};
     return arr;
   }catch(e){
@@ -847,11 +993,13 @@ function renderHero(){
   chgEl.textContent = (chg>=0?'▲ +':'▼ ')+Math.abs(chg).toFixed(2)+'% (24h)';
   chgEl.className = 'chg-big ' + (chg>=0?'up':'down');
   const rsiText = lastRSI!=null ? lastRSI.toFixed(1) : '—';
+  const stochText = (lastStochK!=null && lastStochD!=null) ? `${lastStochK.toFixed(1)} / ${lastStochD.toFixed(1)}` : '—';
   document.getElementById('statsRow').innerHTML = `
     <span>24h High <b>${fmtPx(d.high24h)}</b></span>
     <span>24h Low <b>${fmtPx(d.low24h)}</b></span>
     <span>24h Volume <b>${d.vol24h? d.vol24h.toLocaleString(undefined,{maximumFractionDigits:0})+' USDT':'—'}</b></span>
     <span>RSI(14, ${currentBar}) <b style="color:${lastRSI>70?'var(--loss)':lastRSI<30?'var(--gain)':'var(--text)'}">${rsiText}</b></span>
+    <span>Stoch(9,3,3, ${currentBar}) K/D <b style="color:${lastStochK>80?'var(--loss)':lastStochK<20?'var(--gain)':'var(--text)'}">${stochText}</b></span>
   `;
 }
 
@@ -862,6 +1010,7 @@ async function loadCandles(){
   hoverIndex = null;
   drawChart();
   drawRSIChart();
+  drawStochChart();
 }
 
 function chartMetrics(rect){
@@ -1044,6 +1193,96 @@ function drawRSIChart(){
   }
 }
 
+function drawStochChart(){
+  const canvas = document.getElementById('stochCanvas');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr; canvas.height = rect.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const W = rect.width, H = rect.height;
+  ctx.clearRect(0,0,W,H);
+  if(candles.length < 15){ lastStochK = null; lastStochD = null; return; }
+
+  const highs = candles.map(c=>c.h);
+  const lows = candles.map(c=>c.l);
+  const closes = candles.map(c=>c.c);
+  const { k, d } = calcStochastic(highs, lows, closes, 9, 3, 3); // Stoch(9,3,3)
+  lastStochK = k[k.length-1];
+  lastStochD = d[d.length-1];
+
+  const padL = 8, padR = 58, padT = 10, padB = 6;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const yOf = v => padT + plotH - (v/100)*plotH;
+
+  ctx.fillStyle = 'rgba(239,95,102,0.06)';
+  ctx.fillRect(padL, yOf(100), plotW, yOf(80)-yOf(100));
+  ctx.fillStyle = 'rgba(63,219,143,0.06)';
+  ctx.fillRect(padL, yOf(20), plotW, yOf(0)-yOf(20));
+
+  ctx.strokeStyle = '#161B29'; ctx.setLineDash([2,3]);
+  ctx.beginPath(); ctx.moveTo(padL, yOf(50)); ctx.lineTo(W-padR, yOf(50)); ctx.stroke();
+
+  ctx.strokeStyle = 'rgba(237,238,242,0.55)'; ctx.setLineDash([1,3]); ctx.lineWidth = 1;
+  [80,20].forEach(v=>{
+    ctx.beginPath(); ctx.moveTo(padL, yOf(v)); ctx.lineTo(W-padR, yOf(v)); ctx.stroke();
+  });
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#525A70'; ctx.font = '11.5px "JetBrains Mono", monospace';
+  ctx.fillText('80', W-padR+7, yOf(80)+3);
+  ctx.fillText('20', W-padR+7, yOf(20)+3);
+
+  const n = candles.length;
+  const cw = plotW / n;
+  // %K
+  ctx.strokeStyle = '#2454D6'; ctx.lineWidth = 1.6; ctx.beginPath();
+  let started = false;
+  k.forEach((v,i)=>{
+    if(v==null) return;
+    const x = padL + i*cw + cw/2;
+    const y = yOf(v);
+    if(!started){ ctx.moveTo(x,y); started = true; } else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  // %D
+  ctx.strokeStyle = '#E8B94D'; ctx.lineWidth = 1.4; ctx.beginPath();
+  started = false;
+  d.forEach((v,i)=>{
+    if(v==null) return;
+    const x = padL + i*cw + cw/2;
+    const y = yOf(v);
+    if(!started){ ctx.moveTo(x,y); started = true; } else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  if(hoverIndex != null && k[hoverIndex]!=null){
+    const x = padL + hoverIndex*cw + cw/2;
+    const y = yOf(k[hoverIndex]);
+    ctx.setLineDash([3,3]); ctx.strokeStyle = 'rgba(237,238,242,0.35)';
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT+plotH); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#2454D6'; ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI*2); ctx.fill();
+    if(d[hoverIndex]!=null){
+      const yD = yOf(d[hoverIndex]);
+      ctx.fillStyle = '#E8B94D'; ctx.beginPath(); ctx.arc(x, yD, 3, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
+  if(lastStochK!=null){
+    const y = yOf(lastStochK);
+    ctx.fillStyle = '#2454D6'; ctx.fillRect(W-padR, y-8, 52, 16);
+    ctx.fillStyle = '#EDEEF2'; ctx.font = 'bold 11.5px "JetBrains Mono", monospace';
+    ctx.fillText(lastStochK.toFixed(1), W-padR+5, y+3.5);
+  }
+  if(lastStochD!=null){
+    const y = yOf(lastStochD);
+    ctx.fillStyle = '#E8B94D'; ctx.fillRect(W-padR, y-8, 52, 16);
+    ctx.fillStyle = '#0B0E14'; ctx.font = 'bold 11.5px "JetBrains Mono", monospace';
+    ctx.fillText(lastStochD.toFixed(1), W-padR+5, y+3.5);
+  }
+}
+
 // ---------- crosshair interaction ----------
 function attachCrosshair(){
   const canvas = document.getElementById('chartCanvas');
@@ -1056,7 +1295,7 @@ function attachCrosshair(){
     let idx = Math.floor((x - padL) / cw);
     idx = Math.max(0, Math.min(n-1, idx));
     hoverIndex = idx;
-    drawChart(); drawRSIChart();
+    drawChart(); drawRSIChart(); drawStochChart();
     const c = candles[idx];
     const chg = c.o ? ((c.c-c.o)/c.o*100) : 0;
     tip.style.display = 'block';
@@ -1068,7 +1307,7 @@ function attachCrosshair(){
       L <b>${fmtPx(c.l)}</b>&nbsp; C <b style="color:${chg>=0?'var(--gain)':'var(--loss)'}">${fmtPx(c.c)}</b> <span style="color:${chg>=0?'var(--gain)':'var(--loss)'}">${chg>=0?'+':''}${chg.toFixed(2)}%</span>`;
   });
   canvas.addEventListener('mouseleave', ()=>{
-    hoverIndex = null; tip.style.display='none'; drawChart(); drawRSIChart();
+    hoverIndex = null; tip.style.display='none'; drawChart(); drawRSIChart(); drawStochChart();
   });
 }
 
@@ -1114,16 +1353,32 @@ async function scanMarket(){
   if(scanConfig.ydayPctEnabled){
     for(const inst of universe) tasks.push({ type:'ydaypct', inst, bar:'1D', value: scanConfig.ydayPctValue });
   }
+  // plus, for each enabled "Combined Setup" sub-condition, share one candle fetch/signal computation
+  // per instrument+TF (computeComboSignal works out all 5 sub-conditions in one pass)
+  if(enabledComboSubs().length){
+    for(const inst of universe) tasks.push({ type:'combo', inst, bar: scanConfig.comboBar || '1D' });
+  }
 
   const results = [];
   const failed = [];
   const rsiByInst = {}; // inst -> { [bar]: {hit, val, sma, diff, dir, value} } — filled in first, results assembled after per OR/AND mode
   const smaByInst = {}; // inst -> { [bar]: {hit, sma, dir, value} } — SMA(14)-of-RSI value condition results
   const ydayByInst = {}; // inst -> {hit, pct, value} — %Yesterday condition result, assembled after (like the others)
+  const comboByInst = {}; // inst -> {hit, sig} — Combined Setup AND-combo result, assembled after (like the others)
   let done = 0;
   const concurrency = 3;
   let cursor = 0;
   async function checkOne(task){
+    if(task.type === 'combo'){
+      const { inst, bar } = task;
+      const lb = scanConfig.comboBreakoutLookback || 20;
+      const arr = await getCandles(inst, bar);
+      if(!arr || arr.length < Math.max(65, lb+2)) throw new Error('no candle data');
+      const sig = computeComboSignal(arr, lb);
+      if(!sig) throw new Error('combo warm-up incomplete');
+      comboByInst[inst] = { hit: sig.hit, sig };
+      return;
+    }
     if(task.type === 'ydaypct'){
       const { inst, bar, value } = task;
       const arr = await getCandles(inst, bar);
@@ -1219,15 +1474,17 @@ async function scanMarket(){
   // RSI timeframes; the SMA/%Yesterday groups were always OR'd in separately, which is why AND mode
   // looked like it was showing coins "split apart" instead of coins matching everything at once).
   const logicMode = (scanConfig.logic === 'and') ? 'and' : 'or';
-  const totalGroups = conditions.length + smaConditions.length + (scanConfig.ydayPctEnabled ? 1 : 0);
+  const comboSubs = enabledComboSubs();
+  const totalGroups = conditions.length + smaConditions.length + (scanConfig.ydayPctEnabled ? 1 : 0) + comboSubs.length;
 
   if(logicMode === 'and' && totalGroups > 1){
-    // AND across every enabled group (RSI TFs + SMA TFs + %Yesterday) simultaneously
+    // AND across every enabled group (RSI TFs + SMA TFs + %Yesterday + each Combined Setup sub-condition) simultaneously
     for(const inst of universe){
       let allHit = true;
       const bars = [];
       let smaHits = [];
       let ydayHit = null;
+      let comboHits = [];
 
       for(const cond of conditions){
         const r = rsiByInst[inst] && rsiByInst[inst][cond.bar];
@@ -1246,8 +1503,18 @@ async function scanMarket(){
         if(!r || !r.hit){ allHit = false; }
         else ydayHit = { value: r.value, pct: r.pct };
       }
+      if(allHit && comboSubs.length){
+        const r = comboByInst[inst];
+        if(!r){ allHit = false; }
+        else{
+          for(const sub of comboSubs){
+            if(!sub.hitOf(r.sig)){ allHit = false; break; }
+            comboHits.push({ key: sub.key, label: sub.label, detail: sub.detail(r.sig) });
+          }
+        }
+      }
 
-      if(allHit) results.push({ inst, type:'and-combo', bars, smaHits, ydayHit });
+      if(allHit) results.push({ inst, type:'and-combo', bars, smaHits, ydayHit, comboHits });
     }
   }else{
     // OR (default), or AND with only a single group enabled: any instrument matching any single
@@ -1273,6 +1540,15 @@ async function scanMarket(){
         if(r && r.hit) results.push({ inst, bar:'1D', type:'ydaypct', value: r.value, pct: r.pct });
       }
     }
+    if(comboSubs.length){
+      for(const inst of universe){
+        const r = comboByInst[inst];
+        if(!r) continue;
+        for(const sub of comboSubs){
+          if(sub.hitOf(r.sig)) results.push({ inst, bar: scanConfig.comboBar || '1D', type:'combo', sub: sub.key, subLabel: sub.label, detail: sub.detail(r.sig), sig: r.sig });
+        }
+      }
+    }
   }
 
   // group by TF (in the order the conditions are defined) so each timeframe's results sort by its own direction;
@@ -1286,6 +1562,12 @@ async function scanMarket(){
     if(a.type === 'ydaypct' && b.type === 'ydaypct') return b.pct - a.pct;
     if(a.type === 'ydaypct') return 1;
     if(b.type === 'ydaypct') return -1;
+    if(a.type === 'combo' && b.type === 'combo'){
+      if(a.sub !== b.sub) return COMBO_SUBS.findIndex(s=>s.key===a.sub) - COMBO_SUBS.findIndex(s=>s.key===b.sub);
+      return universeRank[a.inst] - universeRank[b.inst];
+    }
+    if(a.type === 'combo') return 1;
+    if(b.type === 'combo') return -1;
     if(a.type === 'and-combo' && b.type === 'and-combo') return universeRank[a.inst] - universeRank[b.inst];
     if(barRank[a.bar] !== barRank[b.bar]) return barRank[a.bar] - barRank[b.bar];
     if(a.type === 'smaval' || b.type === 'smaval'){
@@ -1310,7 +1592,8 @@ async function scanMarket(){
     ? ` · SMA(14): ${smaConditions.map(c=>`${BAR_LABEL[c.bar]||c.bar}(${c.dir==='above'?'≥':'≤'}${c.value})`).join(', ')}`
     : '';
   const ydayNote = scanConfig.ydayPctEnabled ? ` · %Yesterday≥${scanConfig.ydayPctValue}%` : '';
-  setScanStatus(`Last scan ${new Date().toLocaleTimeString('en-US',{hour12:false})} · ${universe.length} contracts${modeNote}${tfNote}${smaValNote}${ydayNote} · found ${results.length} items${failNote}`);
+  const comboNote = comboSubs.length ? ` · Setup(${BAR_LABEL[scanConfig.comboBar]||scanConfig.comboBar}): ${comboSubs.map(s=>s.label).join(', ')}` : '';
+  setScanStatus(`Last scan ${new Date().toLocaleTimeString('en-US',{hour12:false})} · ${universe.length} contracts${modeNote}${tfNote}${smaValNote}${ydayNote}${comboNote} · found ${results.length} items${failNote}`);
   if(stillFailed.length){
     console.warn('Instrument/TF pairs that could not be scanned (data fetch failed twice):', stillFailed);
   }
@@ -1343,8 +1626,10 @@ function armKey(r){
     const rsiKeys = r.bars.map(b=>`rsi:${b.bar}`);
     const smaKeys = (r.smaHits||[]).map(b=>`sma:${b.bar}`);
     const ydayKey = r.ydayHit ? ['yday'] : [];
-    return `${r.inst}|AND|${[...rsiKeys, ...smaKeys, ...ydayKey].join(',')}`;
+    const comboKeys = (r.comboHits||[]).map(c=>`combo:${c.key}`);
+    return `${r.inst}|AND|${[...rsiKeys, ...smaKeys, ...ydayKey, ...comboKeys].join(',')}`;
   }
+  if(r.type === 'combo') return `${r.inst}|${r.bar}|combo:${r.sub}`;
   return `${r.inst}|${r.bar}|${r.type||'rsi'}`;
 }
 function notifyScanHits(results){
@@ -1356,6 +1641,9 @@ function notifyScanHits(results){
       if(r.type === 'ydaypct'){
         return `${instLabel(r.inst)} (%Yesterday ≥ ${r.value}%) +${r.pct.toFixed(2)}%`;
       }
+      if(r.type === 'combo'){
+        return `${instLabel(r.inst)} (${BAR_LABEL[r.bar]||r.bar} ${r.subLabel}) ${r.detail}`;
+      }
       if(r.type === 'and-combo'){
         const diffDir = scanConfig.smaDiffDir || 'below';
         const parts = [
@@ -1364,7 +1652,8 @@ function notifyScanHits(results){
             return `${BAR_LABEL[b.bar]||b.bar} RSI ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)}${diffPart})`;
           }),
           ...(r.smaHits||[]).map(b => `${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})`),
-          ...(r.ydayHit ? [`%Yesterday ≥ ${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)`] : [])
+          ...(r.ydayHit ? [`%Yesterday ≥ ${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)`] : []),
+          ...(r.comboHits||[]).map(c => `${c.label} (${c.detail})`)
         ];
         return `${instLabel(r.inst)} [AND] ${parts.join(' & ')}`;
       }
@@ -1403,6 +1692,7 @@ function renderScanResults(){
       const rsiBadges = r.bars.map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-dim); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} RSI ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)})</span>`).join('');
       const smaBadges = (r.smaHits||[]).map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})</span>`).join('');
       const ydayBadge = r.ydayHit ? `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">%Yday ≥${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)</span>` : '';
+      const comboBadges = (r.comboHits||[]).map(c => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-2); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[scanConfig.comboBar]||scanConfig.comboBar} ${c.label}</span>`).join('');
       // |RSI-SMA(14)| diff was checked per RSI bar (same TF as that RSI condition), so show one
       // Δ line per bar that carried a diff value, alongside the threshold that was applied.
       const diffDir = scanConfig.smaDiffDir || 'below';
@@ -1413,10 +1703,19 @@ function renderScanResults(){
         <span class="sym">${instLabel(r.inst)} <span style="color:var(--text-faint); font-weight:400;">PERP</span></span>
         <div style="display:flex; flex-wrap:wrap; gap:4px;">
           <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">AND</span>
-          ${rsiBadges}${smaBadges}${ydayBadge}
+          ${rsiBadges}${smaBadges}${ydayBadge}${comboBadges}
         </div>
         <span class="px">${d?fmtPx(d.last):'—'}</span>
         ${diffLines}
+      </div>`;
+    }
+    if(r.type === 'combo'){
+      const barLabel2 = BAR_LABEL[r.bar] || r.bar;
+      return `<div class="scan-card" data-inst="${r.inst}" title="Open in OKX Futures">
+        <span class="sym">${instLabel(r.inst)} <span style="color:var(--text-faint); font-weight:400;">PERP</span></span>
+        <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-2); padding:1px 6px; border-radius:5px; letter-spacing:0.3px; align-self:flex-start;">${barLabel2} · ${r.subLabel}</span>
+        <span class="px">${d?fmtPx(d.last):'—'}</span>
+        <span style="color:var(--text-faint); font-size:11px;">${r.detail}</span>
       </div>`;
     }
     const barLabel = BAR_LABEL[r.bar] || r.bar;
@@ -1565,6 +1864,13 @@ function syncScanUI(){
   document.getElementById('scanSmaDiffValue').value = scanConfig.smaDiffValue != null ? scanConfig.smaDiffValue : 7;
   document.getElementById('scanYdayPctEnabled').checked = !!scanConfig.ydayPctEnabled;
   document.getElementById('scanYdayPctValue').value = scanConfig.ydayPctValue != null ? scanConfig.ydayPctValue : 20;
+  document.getElementById('scanComboBar').value = scanConfig.comboBar || '1D';
+  document.getElementById('scanComboBreakoutLookback').value = scanConfig.comboBreakoutLookback != null ? scanConfig.comboBreakoutLookback : 20;
+  document.getElementById('scanComboSqueeze').checked = !!scanConfig.comboSqueezeEnabled;
+  document.getElementById('scanComboRsiCross').checked = !!scanConfig.comboRsiCrossEnabled;
+  document.getElementById('scanComboStoch').checked = !!scanConfig.comboStochEnabled;
+  document.getElementById('scanComboVolSpike').checked = !!scanConfig.comboVolSpikeEnabled;
+  document.getElementById('scanComboBreakout').checked = !!scanConfig.comboBreakoutEnabled;
 }
 async function onScanConfigChange(){
   scanConfig.enabled = document.getElementById('scanEnabled').checked;
@@ -1574,6 +1880,15 @@ async function onScanConfigChange(){
   scanConfig.smaDiffValue = parseFloat(document.getElementById('scanSmaDiffValue').value) || 7;
   scanConfig.ydayPctEnabled = document.getElementById('scanYdayPctEnabled').checked;
   scanConfig.ydayPctValue = parseFloat(document.getElementById('scanYdayPctValue').value) || 20;
+  scanConfig.comboBar = document.getElementById('scanComboBar').value;
+  let lb = parseInt(document.getElementById('scanComboBreakoutLookback').value) || 20;
+  lb = Math.min(20, Math.max(10, lb));
+  scanConfig.comboBreakoutLookback = lb;
+  scanConfig.comboSqueezeEnabled = document.getElementById('scanComboSqueeze').checked;
+  scanConfig.comboRsiCrossEnabled = document.getElementById('scanComboRsiCross').checked;
+  scanConfig.comboStochEnabled = document.getElementById('scanComboStoch').checked;
+  scanConfig.comboVolSpikeEnabled = document.getElementById('scanComboVolSpike').checked;
+  scanConfig.comboBreakoutEnabled = document.getElementById('scanComboBreakout').checked;
   scanArmed = {};
   await saveScanConfig();
 }
@@ -1597,7 +1912,7 @@ document.getElementById('scanBarGroup').addEventListener('click', e=>{
   scanArmed = {};
   saveScanConfig();
 });
-['scanEnabled','scanLimit','scanSmaDiffEnabled','scanSmaDiffDir','scanSmaDiffValue','scanYdayPctEnabled','scanYdayPctValue'].forEach(id=>{
+['scanEnabled','scanLimit','scanSmaDiffEnabled','scanSmaDiffDir','scanSmaDiffValue','scanYdayPctEnabled','scanYdayPctValue','scanComboBar','scanComboBreakoutLookback','scanComboSqueeze','scanComboRsiCross','scanComboStoch','scanComboVolSpike','scanComboBreakout'].forEach(id=>{
   document.getElementById(id).addEventListener('change', onScanConfigChange);
 });
 document.getElementById('scanLogicGroup').addEventListener('click', e=>{
@@ -1610,7 +1925,7 @@ document.getElementById('scanLogicGroup').addEventListener('click', e=>{
 });
 document.getElementById('scanNowBtn').addEventListener('click', scanMarket);
 
-window.addEventListener('resize', ()=>{ if(candles.length){ drawChart(); drawRSIChart(); } });
+window.addEventListener('resize', ()=>{ if(candles.length){ drawChart(); drawRSIChart(); drawStochChart(); } });
 
 // ---------- init ----------
 async function initApp(){
