@@ -173,6 +173,28 @@
       var(--bg);
     padding:20px;
   }
+  /* Reconnect screen — shown instead of the login form while a saved session is being
+     re-verified after a network hiccup, so a dropped connection never forces a fresh login */
+  #reconnectScreen{
+    position:fixed; inset:0; z-index:1001; display:none; align-items:center; justify-content:center;
+    flex-direction:column; gap:16px; background:var(--bg); padding:20px;
+  }
+  #reconnectScreen .spinner{
+    width:32px; height:32px; border-radius:50%;
+    border:3px solid var(--border); border-top-color:var(--amber);
+    animation:spin 0.85s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  #reconnectScreen .msg{
+    font-family:var(--mono); font-size:13.5px; color:var(--text-dim); letter-spacing:0.4px;
+    text-align:center; max-width:300px; line-height:1.6;
+  }
+  #reconnectScreen button{
+    background:var(--panel-2); border:1px solid var(--border); color:var(--amber);
+    padding:9px 18px; border-radius:8px; cursor:pointer; font-family:var(--mono); font-size:13.5px;
+    display:none;
+  }
+  #reconnectScreen button:hover{ border-color:var(--amber-dim); box-shadow:var(--glow); }
   .login-box{
     width:100%; max-width:360px; background:linear-gradient(180deg, rgba(20,25,38,0.7), rgba(11,14,22,0.55));
     border:1px solid var(--border); border-radius:16px; padding:32px 28px; backdrop-filter:blur(8px);
@@ -259,6 +281,12 @@
 </style>
 </head>
 <body>
+
+<div id="reconnectScreen">
+  <div class="spinner" id="reconnectSpinner"></div>
+  <div class="msg" id="reconnectMsg">กำลังตรวจสอบเซสชันเดิม…</div>
+  <button type="button" id="reconnectRetryBtn">ลองใหม่</button>
+</div>
 
 <div id="loginScreen">
   <div class="login-box">
@@ -407,6 +435,19 @@
   </div>
   <div id="scanSmaConditionsRow" style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; margin-top:10px;"></div>
   <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; padding-top:10px; border-top:1px dashed var(--border-soft);">
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">Green streak TF</span>
+    <div class="tf-toggle" id="scanGreenStreakBarGroup" style="gap:4px;">
+      <button type="button" data-bar="5m">5m</button>
+      <button type="button" data-bar="15m">15m</button>
+      <button type="button" data-bar="1H">1H</button>
+      <button type="button" data-bar="4H">4H</button>
+      <button type="button" data-bar="1D">Day</button>
+      <button type="button" data-bar="1W">Week</button>
+    </div>
+    <span style="font-family:var(--mono); font-size:11.5px; color:var(--text-faint);">(pick as many TFs as you want — checked with the OR/AND Mode toggle up top, same as RSI/SMA)</span>
+  </div>
+  <div id="scanGreenStreakConditionsRow" style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; margin-top:10px;"></div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; padding-top:10px; border-top:1px dashed var(--border-soft);">
     <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px;">Setup conditions</span>
     <span style="color:var(--text-faint);">|</span>
     <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">TF</span>
@@ -445,7 +486,7 @@
       Breakout (close &gt; prior N-bar high)
     </label>
   </div>
-  <div style="font-family:var(--mono); font-size:11.5px; color:var(--text-faint); margin-top:4px;">Each box above is its own filter — combine them with the OR/AND Mode toggle up top, same as the RSI/SMA/%Yesterday conditions.</div>
+  <div style="font-family:var(--mono); font-size:11.5px; color:var(--text-faint); margin-top:4px;">Each box above is its own filter — combine them with the OR/AND Mode toggle up top, same as the RSI/SMA/%Yesterday/Green streak conditions. Green streak now has its own TF picker above so it can be checked on several timeframes at once, independently of this section's single TF.
   <div>
     <div id="scanProgressWrap"><div id="scanProgressBar"></div></div>
     <div id="scanProgressLabel">0%</div>
@@ -457,20 +498,75 @@
 </div><!-- /#appRoot -->
 
 <script>
+// ---------- storage backend ----------
+// window.storage only exists inside Claude's own Artifact preview frame. This app is meant to be
+// opened as a normal, self-hosted webpage, where that API is simply undefined — so every call to
+// it fails every single time, no matter how many times "retry" is pressed (it's not a network
+// issue at all). Use the browser's own localStorage here instead: it's local, synchronous, and
+// needs no network round-trip, so a flaky connection can never block login/session checks again.
+// If this ever *is* opened inside a Claude Artifact, window.storage is used automatically instead.
+const hasClaudeStorage = (typeof window.storage !== 'undefined') && (typeof window.storage.get === 'function');
+const store = hasClaudeStorage ? window.storage : {
+  async get(key){
+    try{
+      const raw = localStorage.getItem(key);
+      return raw == null ? null : { key, value: raw };
+    }catch(e){ throw e; } // e.g. privacy mode blocking storage — surfaced like any other failure
+  },
+  async set(key, value){
+    localStorage.setItem(key, value);
+    return { key, value };
+  },
+  async delete(key){
+    localStorage.removeItem(key);
+    return { key, deleted: true };
+  }
+};
+// Retrying only makes sense for a real network call (window.storage). localStorage is local and
+// either works or doesn't on the first try — retrying it just adds a pointless delay before the
+// user sees the actual (deterministic) result.
+const STORAGE_RETRY_ATTEMPTS = hasClaudeStorage ? 6 : 1;
+const STORAGE_RETRY_DELAY_MS = hasClaudeStorage ? 500 : 0;
+
 // ---------- login gate ----------
 const ALLOWED_USERS = { "AquaMelody": "Melody5230502134#" };
 const SESSION_KEY = "session:v1";
 
+// Retries a flaky async call (storage read/write over an unstable connection) a few times with
+// growing delays before giving up. A single dropped request should not be treated the same as
+// a definitive "no" — that's what was forcing a fresh login every time the signal blipped.
+async function withRetry(fn, attempts=6, baseDelayMs=500){
+  let lastErr;
+  for(let i=0;i<attempts;i++){
+    try{ return await fn(); }
+    catch(e){
+      lastErr = e;
+      if(i < attempts-1) await new Promise(r=>setTimeout(r, baseDelayMs * Math.pow(1.6, i)));
+    }
+  }
+  throw lastErr;
+}
+
 function showApp(){
+  document.getElementById('reconnectScreen').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appRoot').style.display = '';
 }
 function showLogin(msg){
+  document.getElementById('reconnectScreen').style.display = 'none';
   document.getElementById('appRoot').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('loginError').textContent = msg || '';
   document.getElementById('loginPw').value = '';
   setTimeout(()=>document.getElementById(document.getElementById('loginId').value ? 'loginPw' : 'loginId').focus(), 0);
+}
+function showReconnecting(){
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appRoot').style.display = 'none';
+  document.getElementById('reconnectScreen').style.display = 'flex';
+  document.getElementById('reconnectSpinner').style.display = '';
+  document.getElementById('reconnectMsg').textContent = 'กำลังตรวจสอบเซสชันเดิม…';
+  document.getElementById('reconnectRetryBtn').style.display = 'none';
 }
 async function attemptLogin(){
   const idEl = document.getElementById('loginId');
@@ -483,7 +579,13 @@ async function attemptLogin(){
   await new Promise(r=>setTimeout(r, 250)); // brief pause so it doesn't feel instantaneous/guessable
   btn.disabled = false; btn.textContent = 'Log In';
   if(ALLOWED_USERS[id] === pw){
-    try{ await window.storage.set(SESSION_KEY, JSON.stringify({ id, ts: Date.now() })); }catch(e){}
+    try{
+      await withRetry(()=>store.set(SESSION_KEY, JSON.stringify({ id, ts: Date.now() })), STORAGE_RETRY_ATTEMPTS, STORAGE_RETRY_DELAY_MS);
+    }catch(e){
+      // Couldn't persist the session after retries (still offline) — let them in for this visit
+      // anyway, but flag that a reload before the connection recovers may ask for the password again.
+      setTimeout(()=>toast('เข้าสู่ระบบสำเร็จ แต่ยังไม่สามารถบันทึกเซสชันได้ (เน็ตไม่เสถียร) — อาจต้อง Log in ใหม่หากปิด/รีเฟรชแอปตอนนี้'), 300);
+    }
     showApp();
     startAppOnce();
   }else{
@@ -503,9 +605,10 @@ document.getElementById('loginPwToggle').addEventListener('click', ()=>{
   btn.textContent = show ? 'HIDE' : 'SHOW';
 });
 document.getElementById('logoutBtn').addEventListener('click', async ()=>{
-  try{ await window.storage.delete(SESSION_KEY); }catch(e){}
+  try{ await withRetry(()=>store.delete(SESSION_KEY), STORAGE_RETRY_ATTEMPTS, STORAGE_RETRY_DELAY_MS); }catch(e){}
   location.reload();
 });
+document.getElementById('reconnectRetryBtn').addEventListener('click', checkSession);
 
 let __appStarted = false;
 function startAppOnce(){
@@ -514,18 +617,29 @@ function startAppOnce(){
   initApp();
 }
 
-(async function checkSession(){
+async function checkSession(){
+  showReconnecting();
   try{
-    const s = await window.storage.get(SESSION_KEY);
+    const s = await withRetry(()=>store.get(SESSION_KEY), STORAGE_RETRY_ATTEMPTS, STORAGE_RETRY_DELAY_MS);
     const data = s ? JSON.parse(s.value) : null;
     if(data && ALLOWED_USERS[data.id]){
       showApp();
       startAppOnce();
       return;
     }
-  }catch(e){ /* no existing session */ }
-  showLogin();
-})();
+    // Storage answered fine, there's genuinely no saved session — this is a real "please log in".
+    showLogin();
+  }catch(e){
+    // Every retry failed — an unstable connection, not necessarily "logged out". Don't drop to
+    // the login form for this (that would force re-typing the password over a network hiccup);
+    // show a manual retry instead so a saved session is never discarded just because one check
+    // failed to reach the server.
+    document.getElementById('reconnectSpinner').style.display = 'none';
+    document.getElementById('reconnectMsg').textContent = 'สัญญาณอินเทอร์เน็ตไม่เสถียร ไม่สามารถตรวจสอบเซสชันได้ในตอนนี้ กดลองใหม่เมื่อสัญญาณกลับมา';
+    document.getElementById('reconnectRetryBtn').style.display = 'inline-block';
+  }
+}
+checkSession();
 
 const OKX_TICKERS = "https://www.okx.com/api/v5/market/tickers?instType=SPOT";
 const OKX_TICKERS_SWAP = "https://www.okx.com/api/v5/market/tickers?instType=SWAP";
@@ -615,7 +729,7 @@ async function sendTelegram(text){
 }
 
 let watchlist = ["BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","OKB-USDT"];
-let scanConfig = { enabled:false, conditions:[{bar:'1D', dir:'above', value:85}], limit:150, smaDiffEnabled:false, smaDiffDir:'below', smaDiffValue:7, smaConditions:[], ydayPctEnabled:true, ydayPctValue:20, logic:'or', comboBar:'1D', comboBreakoutLookback:20, comboSqueezeEnabled:false, comboRsiCrossEnabled:false, comboStochEnabled:false, comboVolSpikeEnabled:false, comboBreakoutEnabled:false };
+let scanConfig = { enabled:false, conditions:[{bar:'1D', dir:'above', value:85}], limit:150, smaDiffEnabled:false, smaDiffDir:'below', smaDiffValue:7, smaConditions:[], ydayPctEnabled:true, ydayPctValue:20, logic:'or', comboBar:'1D', comboBreakoutLookback:20, comboSqueezeEnabled:false, comboRsiCrossEnabled:false, comboStochEnabled:false, comboVolSpikeEnabled:false, comboBreakoutEnabled:false, greenStreakConditions:[] };
 let scanArmed = {};
 let scanResults = [];
 let scanning = false;
@@ -727,6 +841,8 @@ function trailingMax(arr, i, period){
 //   5) close breaks above the highest high of the prior `breakoutLookback` bars (breakout confirmation)
 // Returns null if there isn't enough history yet; otherwise an object with the overall `hit`
 // plus each sub-condition's boolean and the underlying readings (for badges/notifications).
+// Green streak (consecutive green candles) lives in its own computeGreenStreak() below — it has
+// its own multi-TF picker now, independent of this combo's single `comboBar` TF.
 function computeComboSignal(candles, breakoutLookback){
   const lb = breakoutLookback || 20;
   const n = candles.length;
@@ -770,6 +886,23 @@ function computeComboSignal(candles, breakoutLookback){
     range20, range60, rsi: rsiNow, rsiMA: maNow, k: kNow, d: dNow,
     vol: vols[i], volMA20, close: closes[i], priorHH, breakoutLookback: lb
   };
+}
+
+// Consecutive green candles ending at (and including) the most recent bar — walk backward while
+// close > open, same "streak" concept as scanning a chart by eye for an unbroken run of green.
+// Independent of computeComboSignal so it can be checked on its own set of TFs at once (each TF
+// its own required streak length), same pattern as the SMA(14)-of-RSI conditions.
+function computeGreenStreak(candles, length){
+  const gsLen = length || 7;
+  const n = candles.length;
+  if(n < 2) return null;
+  const i = n-1;
+  let count = 0;
+  for(let j=i; j>=0; j--){
+    if(candles[j].c > candles[j].o) count++;
+    else break;
+  }
+  return { hit: count >= gsLen, count, length: gsLen };
 }
 
 // OKX's plain "1D"/"1W"/etc bars use Hong Kong time (UTC+8) as the day boundary.
@@ -836,11 +969,11 @@ function getQuote(inst){
 // ---------- storage ----------
 async function loadState(){
   try{
-    const w = await window.storage.get('watchlist:v1');
+    const w = await store.get('watchlist:v1');
     if(w && w.value) watchlist = JSON.parse(w.value);
   }catch(e){}
   try{
-    const s = await window.storage.get('scanConfig:v1');
+    const s = await store.get('scanConfig:v1');
     if(s && s.value){
       const loaded = JSON.parse(s.value);
       if(!Array.isArray(loaded.conditions)){
@@ -856,10 +989,10 @@ async function loadState(){
   }catch(e){}
 }
 async function saveWatchlist(){
-  try{ await window.storage.set('watchlist:v1', JSON.stringify(watchlist)); }catch(e){}
+  try{ await store.set('watchlist:v1', JSON.stringify(watchlist)); }catch(e){}
 }
 async function saveScanConfig(){
-  try{ await window.storage.set('scanConfig:v1', JSON.stringify(scanConfig)); }catch(e){}
+  try{ await store.set('scanConfig:v1', JSON.stringify(scanConfig)); }catch(e){}
 }
 
 // ---------- clock ----------
@@ -1337,6 +1470,7 @@ async function scanMarket(){
 
   const conditions = (scanConfig.conditions && scanConfig.conditions.length) ? scanConfig.conditions : [{bar:'1D', dir:'above', value:85}];
   const smaConditions = scanConfig.smaConditions || [];
+  const greenStreakConditions = scanConfig.greenStreakConditions || [];
 
   // build the full task list: every instrument checked against every selected TF's own RSI condition
   const tasks = [];
@@ -1347,6 +1481,11 @@ async function scanMarket(){
   // threshold — same shape as the RSI conditions above but comparing the SMA line, not RSI directly
   for(const cond of smaConditions){
     for(const inst of universe) tasks.push({ type:'smaval', inst, bar: cond.bar, dir: cond.dir, value: cond.value });
+  }
+  // plus, for each selected TF, a separate pass checking that TF's own consecutive-green-candle
+  // streak against its own required length — lets Green streak be checked on several TFs at once
+  for(const cond of greenStreakConditions){
+    for(const inst of universe) tasks.push({ type:'greenstreak', inst, bar: cond.bar, length: cond.length });
   }
   // plus, if enabled, a separate pass checking each instrument's "yesterday" daily-candle % change
   // (open→close of the last fully-closed 1D candle) against a single threshold
@@ -1365,6 +1504,7 @@ async function scanMarket(){
   const smaByInst = {}; // inst -> { [bar]: {hit, sma, dir, value} } — SMA(14)-of-RSI value condition results
   const ydayByInst = {}; // inst -> {hit, pct, value} — %Yesterday condition result, assembled after (like the others)
   const comboByInst = {}; // inst -> {hit, sig} — Combined Setup AND-combo result, assembled after (like the others)
+  const greenStreakByInst = {}; // inst -> { [bar]: {hit, count, length} } — per-TF Green streak results
   let done = 0;
   const concurrency = 3;
   let cursor = 0;
@@ -1377,6 +1517,16 @@ async function scanMarket(){
       const sig = computeComboSignal(arr, lb);
       if(!sig) throw new Error('combo warm-up incomplete');
       comboByInst[inst] = { hit: sig.hit, sig };
+      return;
+    }
+    if(task.type === 'greenstreak'){
+      const { inst, bar, length } = task;
+      const arr = await getCandles(inst, bar);
+      if(!arr || arr.length < 2) throw new Error('no candle data');
+      const sig = computeGreenStreak(arr, length);
+      if(!sig) throw new Error('green streak warm-up incomplete');
+      if(!greenStreakByInst[inst]) greenStreakByInst[inst] = {};
+      greenStreakByInst[inst][bar] = sig;
       return;
     }
     if(task.type === 'ydaypct'){
@@ -1475,14 +1625,15 @@ async function scanMarket(){
   // looked like it was showing coins "split apart" instead of coins matching everything at once).
   const logicMode = (scanConfig.logic === 'and') ? 'and' : 'or';
   const comboSubs = enabledComboSubs();
-  const totalGroups = conditions.length + smaConditions.length + (scanConfig.ydayPctEnabled ? 1 : 0) + comboSubs.length;
+  const totalGroups = conditions.length + smaConditions.length + greenStreakConditions.length + (scanConfig.ydayPctEnabled ? 1 : 0) + comboSubs.length;
 
   if(logicMode === 'and' && totalGroups > 1){
-    // AND across every enabled group (RSI TFs + SMA TFs + %Yesterday + each Combined Setup sub-condition) simultaneously
+    // AND across every enabled group (RSI TFs + SMA TFs + Green streak TFs + %Yesterday + each Combined Setup sub-condition) simultaneously
     for(const inst of universe){
       let allHit = true;
       const bars = [];
       let smaHits = [];
+      let greenStreakHits = [];
       let ydayHit = null;
       let comboHits = [];
 
@@ -1496,6 +1647,13 @@ async function scanMarket(){
           const r = smaByInst[inst] && smaByInst[inst][cond.bar];
           if(!r || !r.hit){ allHit = false; break; }
           smaHits.push({ bar: cond.bar, dir: cond.dir, value: cond.value, sma: r.sma });
+        }
+      }
+      if(allHit){
+        for(const cond of greenStreakConditions){
+          const r = greenStreakByInst[inst] && greenStreakByInst[inst][cond.bar];
+          if(!r || !r.hit){ allHit = false; break; }
+          greenStreakHits.push({ bar: cond.bar, length: cond.length, count: r.count });
         }
       }
       if(allHit && scanConfig.ydayPctEnabled){
@@ -1514,7 +1672,7 @@ async function scanMarket(){
         }
       }
 
-      if(allHit) results.push({ inst, type:'and-combo', bars, smaHits, ydayHit, comboHits });
+      if(allHit) results.push({ inst, type:'and-combo', bars, smaHits, greenStreakHits, ydayHit, comboHits });
     }
   }else{
     // OR (default), or AND with only a single group enabled: any instrument matching any single
@@ -1532,6 +1690,12 @@ async function scanMarket(){
       for(const inst of universe){
         const r = smaByInst[inst] && smaByInst[inst][cond.bar];
         if(r && r.hit) results.push({ inst, bar: cond.bar, type:'smaval', dir: cond.dir, value: cond.value, sma: r.sma });
+      }
+    }
+    for(const cond of greenStreakConditions){
+      for(const inst of universe){
+        const r = greenStreakByInst[inst] && greenStreakByInst[inst][cond.bar];
+        if(r && r.hit) results.push({ inst, bar: cond.bar, type:'greenstreak', length: cond.length, count: r.count });
       }
     }
     if(scanConfig.ydayPctEnabled){
@@ -1557,6 +1721,7 @@ async function scanMarket(){
   const barRank = {};
   conditions.forEach((c,i)=>{ barRank[c.bar] = i; });
   smaConditions.forEach((c,i)=>{ if(!(c.bar in barRank)) barRank[c.bar] = conditions.length + i; });
+  greenStreakConditions.forEach((c,i)=>{ if(!(c.bar in barRank)) barRank[c.bar] = conditions.length + smaConditions.length + i; });
   const universeRank = {}; universe.forEach((inst,i)=>{ universeRank[inst] = i; });
   results.sort((a,b) => {
     if(a.type === 'ydaypct' && b.type === 'ydaypct') return b.pct - a.pct;
@@ -1570,6 +1735,10 @@ async function scanMarket(){
     if(b.type === 'combo') return -1;
     if(a.type === 'and-combo' && b.type === 'and-combo') return universeRank[a.inst] - universeRank[b.inst];
     if(barRank[a.bar] !== barRank[b.bar]) return barRank[a.bar] - barRank[b.bar];
+    if(a.type === 'greenstreak' || b.type === 'greenstreak'){
+      if(a.type !== b.type) return a.type === 'greenstreak' ? 1 : -1;
+      return b.count - a.count;
+    }
     if(a.type === 'smaval' || b.type === 'smaval'){
       if(a.type !== b.type) return a.type === 'smaval' ? 1 : -1;
       return a.dir === 'above' ? b.sma - a.sma : a.sma - b.sma;
@@ -1591,9 +1760,12 @@ async function scanMarket(){
   const smaValNote = smaConditions.length
     ? ` · SMA(14): ${smaConditions.map(c=>`${BAR_LABEL[c.bar]||c.bar}(${c.dir==='above'?'≥':'≤'}${c.value})`).join(', ')}`
     : '';
+  const greenStreakNote = greenStreakConditions.length
+    ? ` · Green streak: ${greenStreakConditions.map(c=>`${BAR_LABEL[c.bar]||c.bar}(≥${c.length})`).join(', ')}`
+    : '';
   const ydayNote = scanConfig.ydayPctEnabled ? ` · %Yesterday≥${scanConfig.ydayPctValue}%` : '';
   const comboNote = comboSubs.length ? ` · Setup(${BAR_LABEL[scanConfig.comboBar]||scanConfig.comboBar}): ${comboSubs.map(s=>s.label).join(', ')}` : '';
-  setScanStatus(`Last scan ${new Date().toLocaleTimeString('en-US',{hour12:false})} · ${universe.length} contracts${modeNote}${tfNote}${smaValNote}${ydayNote}${comboNote} · found ${results.length} items${failNote}`);
+  setScanStatus(`Last scan ${new Date().toLocaleTimeString('en-US',{hour12:false})} · ${universe.length} contracts${modeNote}${tfNote}${smaValNote}${greenStreakNote}${ydayNote}${comboNote} · found ${results.length} items${failNote}`);
   if(stillFailed.length){
     console.warn('Instrument/TF pairs that could not be scanned (data fetch failed twice):', stillFailed);
   }
@@ -1625,9 +1797,10 @@ function armKey(r){
   if(r.type === 'and-combo'){
     const rsiKeys = r.bars.map(b=>`rsi:${b.bar}`);
     const smaKeys = (r.smaHits||[]).map(b=>`sma:${b.bar}`);
+    const gsKeys = (r.greenStreakHits||[]).map(b=>`gs:${b.bar}`);
     const ydayKey = r.ydayHit ? ['yday'] : [];
     const comboKeys = (r.comboHits||[]).map(c=>`combo:${c.key}`);
-    return `${r.inst}|AND|${[...rsiKeys, ...smaKeys, ...ydayKey, ...comboKeys].join(',')}`;
+    return `${r.inst}|AND|${[...rsiKeys, ...smaKeys, ...gsKeys, ...ydayKey, ...comboKeys].join(',')}`;
   }
   if(r.type === 'combo') return `${r.inst}|${r.bar}|combo:${r.sub}`;
   return `${r.inst}|${r.bar}|${r.type||'rsi'}`;
@@ -1652,6 +1825,7 @@ function notifyScanHits(results){
             return `${BAR_LABEL[b.bar]||b.bar} RSI ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)}${diffPart})`;
           }),
           ...(r.smaHits||[]).map(b => `${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})`),
+          ...(r.greenStreakHits||[]).map(b => `${BAR_LABEL[b.bar]||b.bar} Green streak ≥${b.length} (${b.count})`),
           ...(r.ydayHit ? [`%Yesterday ≥ ${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)`] : []),
           ...(r.comboHits||[]).map(c => `${c.label} (${c.detail})`)
         ];
@@ -1660,6 +1834,9 @@ function notifyScanHits(results){
       const barLabel = BAR_LABEL[r.bar] || r.bar;
       if(r.type === 'smaval'){
         return `${instLabel(r.inst)} (${barLabel} SMA(14) ${r.dir==='above'?'≥':'≤'}${r.value}) SMA ${r.sma.toFixed(1)}`;
+      }
+      if(r.type === 'greenstreak'){
+        return `${instLabel(r.inst)} (${barLabel} Green streak ≥${r.length}) ${r.count} bars`;
       }
       const diffPart = (scanConfig.smaDiffEnabled && r.diff != null) ? ` (Δ${r.diff.toFixed(1)})` : '';
       return `${instLabel(r.inst)} (${barLabel} ${r.dir==='above'?'≥':'≤'}${r.value}) ${r.rsi.toFixed(1)}${diffPart}`;
@@ -1691,6 +1868,7 @@ function renderScanResults(){
       // so an AND match is legible on its own without cross-checking the condition rows above.
       const rsiBadges = r.bars.map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-dim); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} RSI ${b.dir==='above'?'≥':'≤'}${b.value} (${b.rsi.toFixed(1)})</span>`).join('');
       const smaBadges = (r.smaHits||[]).map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})</span>`).join('');
+      const greenStreakBadges = (r.greenStreakHits||[]).map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} Streak ≥${b.length} (${b.count})</span>`).join('');
       const ydayBadge = r.ydayHit ? `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">%Yday ≥${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)</span>` : '';
       const comboBadges = (r.comboHits||[]).map(c => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-2); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[scanConfig.comboBar]||scanConfig.comboBar} ${c.label}</span>`).join('');
       // |RSI-SMA(14)| diff was checked per RSI bar (same TF as that RSI condition), so show one
@@ -1703,7 +1881,7 @@ function renderScanResults(){
         <span class="sym">${instLabel(r.inst)} <span style="color:var(--text-faint); font-weight:400;">PERP</span></span>
         <div style="display:flex; flex-wrap:wrap; gap:4px;">
           <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">AND</span>
-          ${rsiBadges}${smaBadges}${ydayBadge}${comboBadges}
+          ${rsiBadges}${smaBadges}${greenStreakBadges}${ydayBadge}${comboBadges}
         </div>
         <span class="px">${d?fmtPx(d.last):'—'}</span>
         ${diffLines}
@@ -1725,6 +1903,15 @@ function renderScanResults(){
         <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px; align-self:flex-start;">${barLabel} · SMA</span>
         <span class="rsi">${r.sma.toFixed(1)}</span>
         <span class="px">${d?fmtPx(d.last):'—'}</span>
+      </div>`;
+    }
+    if(r.type === 'greenstreak'){
+      return `<div class="scan-card" data-inst="${r.inst}" title="Open in OKX Futures">
+        <span class="sym">${instLabel(r.inst)} <span style="color:var(--text-faint); font-weight:400;">PERP</span></span>
+        <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px; align-self:flex-start;">${barLabel} · Green streak</span>
+        <span class="rsi" style="color:var(--gain);">${r.count} bars</span>
+        <span class="px">${d?fmtPx(d.last):'—'}</span>
+        <span style="color:var(--text-faint); font-size:11px;">need ≥${r.length}</span>
       </div>`;
     }
     const diffLine = (scanConfig.smaDiffEnabled && r.diff != null)
@@ -1845,6 +2032,52 @@ document.getElementById('scanSmaBarGroup').addEventListener('click', e=>{
   saveScanConfig();
 });
 
+// Green streak conditions — one row per selected TF, each with its own required streak length,
+// same row shape as the SMA(14) conditions above but for consecutive-green-candle count.
+function renderGreenStreakConditionRows(){
+  const wrap = document.getElementById('scanGreenStreakConditionsRow');
+  const sorted = (scanConfig.greenStreakConditions||[]).slice().sort((a,b)=>BAR_ORDER.indexOf(a.bar)-BAR_ORDER.indexOf(b.bar));
+  wrap.innerHTML = sorted.map(c => `
+    <div class="cond-row" data-bar="${c.bar}">
+      <span class="cond-tf">${BAR_LABEL[c.bar]||c.bar}</span>
+      <span style="font-family:var(--mono); font-size:13px; color:var(--text-dim);">Green streak ≥</span>
+      <input class="cond-value" type="number" step="1" min="2" max="50" value="${c.length}" style="width:56px;">
+      <span style="font-family:var(--mono); font-size:13px; color:var(--text-dim);">bars</span>
+    </div>
+  `).join('');
+}
+document.getElementById('scanGreenStreakConditionsRow').addEventListener('change', e=>{
+  const row = e.target.closest('.cond-row');
+  if(!row) return;
+  const bar = row.dataset.bar;
+  const cond = (scanConfig.greenStreakConditions||[]).find(c => c.bar === bar);
+  if(!cond) return;
+  let len = parseInt(row.querySelector('.cond-value').value) || 7;
+  len = Math.min(50, Math.max(2, len));
+  cond.length = len;
+  scanArmed = {};
+  saveScanConfig();
+});
+document.getElementById('scanGreenStreakBarGroup').addEventListener('click', e=>{
+  const btn = e.target.closest('button');
+  if(!btn) return;
+  if(!scanConfig.greenStreakConditions) scanConfig.greenStreakConditions = [];
+  const bar = btn.dataset.bar;
+  const idx = scanConfig.greenStreakConditions.findIndex(c => c.bar === bar);
+  if(idx >= 0){
+    // like the SMA TF group, this one can be emptied entirely — that's how the Green streak scan turns off
+    scanConfig.greenStreakConditions.splice(idx, 1);
+    btn.classList.remove('active');
+  }else{
+    const template = scanConfig.greenStreakConditions[scanConfig.greenStreakConditions.length-1] || { length:7 };
+    scanConfig.greenStreakConditions.push({ bar, length: template.length });
+    btn.classList.add('active');
+  }
+  renderGreenStreakConditionRows();
+  scanArmed = {};
+  saveScanConfig();
+});
+
 function syncScanUI(){
   document.getElementById('scanEnabled').checked = scanConfig.enabled;
   document.querySelectorAll('#scanBarGroup button').forEach(b=>{
@@ -1858,6 +2091,10 @@ function syncScanUI(){
     b.classList.toggle('active', (scanConfig.smaConditions||[]).some(c=>c.bar===b.dataset.bar));
   });
   renderSmaConditionRows();
+  document.querySelectorAll('#scanGreenStreakBarGroup button').forEach(b=>{
+    b.classList.toggle('active', (scanConfig.greenStreakConditions||[]).some(c=>c.bar===b.dataset.bar));
+  });
+  renderGreenStreakConditionRows();
   document.getElementById('scanLimit').value = scanConfig.limit;
   document.getElementById('scanSmaDiffEnabled').checked = !!scanConfig.smaDiffEnabled;
   document.getElementById('scanSmaDiffDir').value = scanConfig.smaDiffDir || 'below';
