@@ -402,6 +402,8 @@
     <input id="scanLimit" type="number" step="10" value="150" style="width:64px; background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:7px 9px; border-radius:7px; font-family:var(--mono); font-size:14px;">
     <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">contracts (sorted by volume)</span>
     <button class="icon-btn" id="scanNowBtn" style="margin-left:auto; color:#0B0E14; background:linear-gradient(180deg, #E8EAF0, #B7BCC9); border-color:#9CA2B3;">Scan</button>
+    <button class="icon-btn" id="scanStopBtn" style="display:none; color:#0B0E14; background:linear-gradient(180deg, #F2CD73, #E8B94D); border-color:#8A6F33;" title="Stop now, keep results found so far, and turn off auto-scan">Stop</button>
+    <button class="icon-btn" id="scanCancelBtn" style="display:none; color:#fff; background:linear-gradient(180deg, #EF5F66, #B83C43); border-color:#8E2A30;" title="Abort this scan and discard it (previous results are kept)">Cancel</button>
   </div>
   <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
     <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:14px; cursor:pointer;">
@@ -447,6 +449,33 @@
     <span style="font-family:var(--mono); font-size:11.5px; color:var(--text-faint);">(pick as many TFs as you want — checked with the OR/AND Mode toggle up top, same as RSI/SMA)</span>
   </div>
   <div id="scanGreenStreakConditionsRow" style="display:flex; gap:14px; flex-wrap:wrap; align-items:center; margin-top:10px;"></div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; padding-top:10px; border-top:1px dashed var(--border-soft);">
+    <label style="display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:14px; cursor:pointer;" title="Scan for EMA fast × EMA slow crossovers on the selected timeframe">
+      <input type="checkbox" id="scanEmaCrossEnabled" style="accent-color:#E8B94D; width:15px; height:15px;">
+      EMA Cross
+    </label>
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">TF</span>
+    <select id="scanEmaCrossBar" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:13.5px;">
+      <option value="5m">5m</option>
+      <option value="15m">15m</option>
+      <option value="1H">1H</option>
+      <option value="4H">4H</option>
+      <option value="1D" selected>Day</option>
+      <option value="1W">Week</option>
+    </select>
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">EMA</span>
+    <input id="scanEmaFast" type="number" step="1" min="2" value="7" style="width:56px; background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:7px 9px; border-radius:7px; font-family:var(--mono); font-size:14px;">
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">×</span>
+    <input id="scanEmaSlow" type="number" step="1" min="3" value="30" style="width:56px; background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:7px 9px; border-radius:7px; font-family:var(--mono); font-size:14px;">
+    <select id="scanEmaCrossDir" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:13.5px;">
+      <option value="any">Any cross</option>
+      <option value="golden">Golden (fast crosses above slow)</option>
+      <option value="death">Death (fast crosses below slow)</option>
+    </select>
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);" title="1 = cross happens on the latest bar. 2 = within the last 2 bars, etc.">within last</span>
+    <input id="scanEmaCrossLookback" type="number" step="1" min="1" max="10" value="1" style="width:52px; background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:7px 9px; border-radius:7px; font-family:var(--mono); font-size:14px;">
+    <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim);">bars</span>
+  </div>
   <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; padding-top:10px; border-top:1px dashed var(--border-soft);">
     <span style="font-family:var(--mono); font-size:13.5px; color:var(--text-dim); text-transform:uppercase; letter-spacing:1px;">Setup conditions</span>
     <span style="color:var(--text-faint);">|</span>
@@ -729,10 +758,17 @@ async function sendTelegram(text){
 }
 
 let watchlist = ["BTC-USDT","ETH-USDT","SOL-USDT","XRP-USDT","OKB-USDT"];
-let scanConfig = { enabled:false, conditions:[{bar:'1D', dir:'above', value:85}], limit:150, smaDiffEnabled:false, smaDiffDir:'below', smaDiffValue:7, smaConditions:[], ydayPctEnabled:true, ydayPctValue:20, logic:'or', comboBar:'1D', comboBreakoutLookback:20, comboSqueezeEnabled:false, comboRsiCrossEnabled:false, comboStochEnabled:false, comboVolSpikeEnabled:false, comboBreakoutEnabled:false, greenStreakConditions:[] };
+let scanConfig = { enabled:false, conditions:[{bar:'1D', dir:'above', value:85}], limit:150, smaDiffEnabled:false, smaDiffDir:'below', smaDiffValue:7, smaConditions:[], ydayPctEnabled:true, ydayPctValue:20, logic:'or', comboBar:'1D', comboBreakoutLookback:20, comboSqueezeEnabled:false, comboRsiCrossEnabled:false, comboStochEnabled:false, comboVolSpikeEnabled:false, comboBreakoutEnabled:false, greenStreakConditions:[], emaCrossEnabled:false, emaCrossBar:'1D', emaFast:7, emaSlow:30, emaCrossDir:'any', emaCrossLookback:1 };
 let scanArmed = {};
 let scanResults = [];
 let scanning = false;
+let scanAbort = null; // null | 'stop' | 'cancel' — set by the Stop/Cancel buttons while a scan is running
+function setScanButtons(running){
+  document.getElementById('scanStopBtn').style.display = running ? '' : 'none';
+  document.getElementById('scanCancelBtn').style.display = running ? '' : 'none';
+  document.getElementById('scanNowBtn').disabled = !!running;
+  document.getElementById('scanNowBtn').style.opacity = running ? '0.5' : '';
+}
 let tickerData = {};
 let futuresTickerData = {};
 let selected = "BTC-USDT";
@@ -903,6 +939,51 @@ function computeGreenStreak(candles, length){
     else break;
   }
   return { hit: count >= gsLen, count, length: gsLen };
+}
+
+// Exponential moving average, seeded with the SMA of the first `period` values (standard approach).
+// Entries before the seed point are null — same warm-up convention as calcSMA/calcRSI.
+function calcEMA(values, period){
+  const out = new Array(values.length).fill(null);
+  if(values.length < period) return out;
+  const k = 2/(period+1);
+  let sum = 0;
+  for(let i=0;i<period;i++) sum += values[i];
+  let prev = sum/period;
+  out[period-1] = prev;
+  for(let i=period;i<values.length;i++){
+    prev = values[i]*k + prev*(1-k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+// EMA(fast) × EMA(slow) crossover detector. Looks at the most recent `lookback` bars (1 = only the
+// latest, possibly still-forming bar). golden = fast crosses from <= slow to > slow, death = the reverse.
+// dir: 'golden' | 'death' | 'any'. Returns null if there isn't enough history for the slow EMA.
+function computeEmaCross(candles, fast, slow, dir, lookback){
+  const f = Math.max(2, fast|0), sl = Math.max(f+1, slow|0), lb = Math.max(1, lookback|0);
+  const n = candles.length;
+  if(n < sl + lb + 1) return null;
+  const closes = candles.map(c=>c.c);
+  const emaF = calcEMA(closes, f);
+  const emaS = calcEMA(closes, sl);
+  for(let k=0; k<lb; k++){
+    const i = n-1-k, j = i-1;
+    if(j < 0 || emaS[j]==null || emaS[i]==null) break;
+    const dPrev = emaF[j]-emaS[j], dNow = emaF[i]-emaS[i];
+    const golden = dPrev <= 0 && dNow > 0;
+    const death  = dPrev >= 0 && dNow < 0;
+    if((golden && dir !== 'death') || (death && dir !== 'golden')){
+      return { hit:true, cross: golden ? 'golden' : 'death', barsAgo:k, fast:f, slow:sl, emaF:emaF[i], emaS:emaS[i], close:closes[n-1] };
+    }
+  }
+  return { hit:false, cross:null, barsAgo:null, fast:f, slow:sl, emaF:emaF[n-1], emaS:emaS[n-1], close:closes[n-1] };
+}
+function emaCrossLabel(sig){
+  const arrow = sig.cross === 'golden' ? '▲ Golden' : '▼ Death';
+  const when = sig.barsAgo === 0 ? 'now' : `${sig.barsAgo} bar${sig.barsAgo>1?'s':''} ago`;
+  return `EMA${sig.fast}×${sig.slow} ${arrow} (${when})`;
 }
 
 // OKX's plain "1D"/"1W"/etc bars use Hong Kong time (UTC+8) as the day boundary.
@@ -1460,9 +1541,19 @@ function setScanProgress(pct){
 async function scanMarket(){
   if(scanning) return;
   scanning = true;
+  scanAbort = null;
+  setScanButtons(true);
   setScanStatus('Scanning…');
+  function finishCancel(){
+    scanning = false;
+    scanAbort = null;
+    setScanButtons(false);
+    setScanProgress(null);
+    setScanStatus('Scan cancelled — previous results kept');
+  }
 
   await fetchFuturesTickers();
+  if(scanAbort === 'cancel') return finishCancel();
 
   let universe = Object.keys(futuresTickerData);
   universe.sort((a,b) => (futuresTickerData[b].vol24h||0) - (futuresTickerData[a].vol24h||0));
@@ -1498,12 +1589,18 @@ async function scanMarket(){
     for(const inst of universe) tasks.push({ type:'combo', inst, bar: scanConfig.comboBar || '1D' });
   }
 
+  // plus, if enabled, an EMA(fast) × EMA(slow) crossover pass on the chosen TF
+  if(scanConfig.emaCrossEnabled){
+    for(const inst of universe) tasks.push({ type:'emacross', inst, bar: scanConfig.emaCrossBar || '1D' });
+  }
+
   const results = [];
   const failed = [];
   const rsiByInst = {}; // inst -> { [bar]: {hit, val, sma, diff, dir, value} } — filled in first, results assembled after per OR/AND mode
   const smaByInst = {}; // inst -> { [bar]: {hit, sma, dir, value} } — SMA(14)-of-RSI value condition results
   const ydayByInst = {}; // inst -> {hit, pct, value} — %Yesterday condition result, assembled after (like the others)
   const comboByInst = {}; // inst -> {hit, sig} — Combined Setup AND-combo result, assembled after (like the others)
+  const emaCrossByInst = {}; // inst -> {hit, sig} — EMA cross result
   const greenStreakByInst = {}; // inst -> { [bar]: {hit, count, length} } — per-TF Green streak results
   let done = 0;
   const concurrency = 3;
@@ -1517,6 +1614,16 @@ async function scanMarket(){
       const sig = computeComboSignal(arr, lb);
       if(!sig) throw new Error('combo warm-up incomplete');
       comboByInst[inst] = { hit: sig.hit, sig };
+      return;
+    }
+    if(task.type === 'emacross'){
+      const { inst, bar } = task;
+      const arr = await getCandles(inst, bar);
+      const need = Math.max(2, scanConfig.emaSlow||30) + Math.max(1, scanConfig.emaCrossLookback||1) + 1;
+      if(!arr || arr.length < need) throw new Error('no candle data');
+      const sig = computeEmaCross(arr, scanConfig.emaFast||7, scanConfig.emaSlow||30, scanConfig.emaCrossDir||'any', scanConfig.emaCrossLookback||1);
+      if(!sig) throw new Error('ema warm-up incomplete');
+      emaCrossByInst[inst] = { hit: sig.hit, sig };
       return;
     }
     if(task.type === 'greenstreak'){
@@ -1584,7 +1691,7 @@ async function scanMarket(){
     rsiByInst[inst][bar] = { hit, val, sma: smaVal, diff, dir, value };
   }
   async function worker(list, delayMs){
-    while(cursor < list.length){
+    while(cursor < list.length && !scanAbort){
       const task = list[cursor++];
       try{
         await checkOne(task);
@@ -1598,16 +1705,18 @@ async function scanMarket(){
   }
   await Promise.all(Array.from({length: Math.min(concurrency, tasks.length)}, ()=>worker(tasks, 120)));
 
+  if(scanAbort === 'cancel') return finishCancel();
+
   // retry pass: instrument/TF pairs that failed (often proxy rate-limits, not "no signal") get one more
   // slower, lower-concurrency shot before we treat them as unreadable
   let stillFailed = [];
-  if(failed.length){
+  if(failed.length && !scanAbort){
     setScanStatus(`Retrying ${failed.length} items that failed to fetch on first pass…`);
     cursor = 0;
     const retryList = failed.slice();
     const retryFailed = [];
     async function retryWorker(){
-      while(cursor < retryList.length){
+      while(cursor < retryList.length && !scanAbort){
         const task = retryList[cursor++];
         try{ await checkOne(task); }
         catch(e){ retryFailed.push(task); }
@@ -1617,6 +1726,7 @@ async function scanMarket(){
     await Promise.all(Array.from({length: Math.min(2, retryList.length)}, retryWorker));
     stillFailed = retryFailed;
   }
+  if(scanAbort === 'cancel') return finishCancel();
 
   // assemble results per the selected logic mode. Every enabled filter — each RSI-per-TF condition,
   // each SMA(14)-of-RSI condition, and the %Yesterday condition — is one "group". In AND mode all
@@ -1625,7 +1735,7 @@ async function scanMarket(){
   // looked like it was showing coins "split apart" instead of coins matching everything at once).
   const logicMode = (scanConfig.logic === 'and') ? 'and' : 'or';
   const comboSubs = enabledComboSubs();
-  const totalGroups = conditions.length + smaConditions.length + greenStreakConditions.length + (scanConfig.ydayPctEnabled ? 1 : 0) + comboSubs.length;
+  const totalGroups = conditions.length + smaConditions.length + greenStreakConditions.length + (scanConfig.ydayPctEnabled ? 1 : 0) + (scanConfig.emaCrossEnabled ? 1 : 0) + comboSubs.length;
 
   if(logicMode === 'and' && totalGroups > 1){
     // AND across every enabled group (RSI TFs + SMA TFs + Green streak TFs + %Yesterday + each Combined Setup sub-condition) simultaneously
@@ -1636,6 +1746,7 @@ async function scanMarket(){
       let greenStreakHits = [];
       let ydayHit = null;
       let comboHits = [];
+      let emaHit = null;
 
       for(const cond of conditions){
         const r = rsiByInst[inst] && rsiByInst[inst][cond.bar];
@@ -1661,6 +1772,11 @@ async function scanMarket(){
         if(!r || !r.hit){ allHit = false; }
         else ydayHit = { value: r.value, pct: r.pct };
       }
+      if(allHit && scanConfig.emaCrossEnabled){
+        const r = emaCrossByInst[inst];
+        if(!r || !r.hit) allHit = false;
+        else emaHit = { bar: scanConfig.emaCrossBar || '1D', sig: r.sig };
+      }
       if(allHit && comboSubs.length){
         const r = comboByInst[inst];
         if(!r){ allHit = false; }
@@ -1672,7 +1788,7 @@ async function scanMarket(){
         }
       }
 
-      if(allHit) results.push({ inst, type:'and-combo', bars, smaHits, greenStreakHits, ydayHit, comboHits });
+      if(allHit) results.push({ inst, type:'and-combo', bars, smaHits, greenStreakHits, ydayHit, emaHit, comboHits });
     }
   }else{
     // OR (default), or AND with only a single group enabled: any instrument matching any single
@@ -1704,6 +1820,12 @@ async function scanMarket(){
         if(r && r.hit) results.push({ inst, bar:'1D', type:'ydaypct', value: r.value, pct: r.pct });
       }
     }
+    if(scanConfig.emaCrossEnabled){
+      for(const inst of universe){
+        const r = emaCrossByInst[inst];
+        if(r && r.hit) results.push({ inst, bar: scanConfig.emaCrossBar || '1D', type:'emacross', sig: r.sig });
+      }
+    }
     if(comboSubs.length){
       for(const inst of universe){
         const r = comboByInst[inst];
@@ -1731,6 +1853,12 @@ async function scanMarket(){
       if(a.sub !== b.sub) return COMBO_SUBS.findIndex(s=>s.key===a.sub) - COMBO_SUBS.findIndex(s=>s.key===b.sub);
       return universeRank[a.inst] - universeRank[b.inst];
     }
+    if(a.type === 'emacross' && b.type === 'emacross'){
+      if(a.sig.barsAgo !== b.sig.barsAgo) return a.sig.barsAgo - b.sig.barsAgo; // freshest cross first
+      return universeRank[a.inst] - universeRank[b.inst];
+    }
+    if(a.type === 'emacross') return 1;
+    if(b.type === 'emacross') return -1;
     if(a.type === 'combo') return 1;
     if(b.type === 'combo') return -1;
     if(a.type === 'and-combo' && b.type === 'and-combo') return universeRank[a.inst] - universeRank[b.inst];
@@ -1750,7 +1878,10 @@ async function scanMarket(){
   await addScanResultsToWatchlist(results);
   notifyScanHits(results);
 
+  const wasStopped = scanAbort === 'stop';
   scanning = false;
+  scanAbort = null;
+  setScanButtons(false);
   setScanProgress(null);
   const failNote = stillFailed.length ? ` · ${stillFailed.length} items failed to fetch (not counted as "no match")` : '';
   const modeNote = (totalGroups > 1) ? ` · Mode: ${logicMode==='and'?'AND (all conditions must match together)':'OR'}` : '';
@@ -1764,8 +1895,9 @@ async function scanMarket(){
     ? ` · Green streak: ${greenStreakConditions.map(c=>`${BAR_LABEL[c.bar]||c.bar}(≥${c.length})`).join(', ')}`
     : '';
   const ydayNote = scanConfig.ydayPctEnabled ? ` · %Yesterday≥${scanConfig.ydayPctValue}%` : '';
+  const emaNote = scanConfig.emaCrossEnabled ? ` · EMA${scanConfig.emaFast}×${scanConfig.emaSlow}(${BAR_LABEL[scanConfig.emaCrossBar]||scanConfig.emaCrossBar}, ${scanConfig.emaCrossDir}, ≤${scanConfig.emaCrossLookback} bars)` : '';
   const comboNote = comboSubs.length ? ` · Setup(${BAR_LABEL[scanConfig.comboBar]||scanConfig.comboBar}): ${comboSubs.map(s=>s.label).join(', ')}` : '';
-  setScanStatus(`Last scan ${new Date().toLocaleTimeString('en-US',{hour12:false})} · ${universe.length} contracts${modeNote}${tfNote}${smaValNote}${greenStreakNote}${ydayNote}${comboNote} · found ${results.length} items${failNote}`);
+  setScanStatus(`Last scan ${new Date().toLocaleTimeString('en-US',{hour12:false})} · ${universe.length} contracts${modeNote}${tfNote}${smaValNote}${greenStreakNote}${ydayNote}${emaNote}${comboNote} · found ${results.length} items${failNote}${wasStopped ? ' · ⏹ STOPPED early — partial results' : ''}`);
   if(stillFailed.length){
     console.warn('Instrument/TF pairs that could not be scanned (data fetch failed twice):', stillFailed);
   }
@@ -1800,9 +1932,11 @@ function armKey(r){
     const gsKeys = (r.greenStreakHits||[]).map(b=>`gs:${b.bar}`);
     const ydayKey = r.ydayHit ? ['yday'] : [];
     const comboKeys = (r.comboHits||[]).map(c=>`combo:${c.key}`);
-    return `${r.inst}|AND|${[...rsiKeys, ...smaKeys, ...gsKeys, ...ydayKey, ...comboKeys].join(',')}`;
+    const emaKey = r.emaHit ? [`ema:${r.emaHit.sig.cross}`] : [];
+    return `${r.inst}|AND|${[...rsiKeys, ...smaKeys, ...gsKeys, ...ydayKey, ...emaKey, ...comboKeys].join(',')}`;
   }
   if(r.type === 'combo') return `${r.inst}|${r.bar}|combo:${r.sub}`;
+  if(r.type === 'emacross') return `${r.inst}|${r.bar}|emacross:${r.sig.cross}`;
   return `${r.inst}|${r.bar}|${r.type||'rsi'}`;
 }
 function notifyScanHits(results){
@@ -1817,6 +1951,9 @@ function notifyScanHits(results){
       if(r.type === 'combo'){
         return `${instLabel(r.inst)} (${BAR_LABEL[r.bar]||r.bar} ${r.subLabel}) ${r.detail}`;
       }
+      if(r.type === 'emacross'){
+        return `${instLabel(r.inst)} (${BAR_LABEL[r.bar]||r.bar} ${emaCrossLabel(r.sig)}) EMA${r.sig.fast} ${fmtPx(r.sig.emaF)} / EMA${r.sig.slow} ${fmtPx(r.sig.emaS)}`;
+      }
       if(r.type === 'and-combo'){
         const diffDir = scanConfig.smaDiffDir || 'below';
         const parts = [
@@ -1827,6 +1964,7 @@ function notifyScanHits(results){
           ...(r.smaHits||[]).map(b => `${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})`),
           ...(r.greenStreakHits||[]).map(b => `${BAR_LABEL[b.bar]||b.bar} Green streak ≥${b.length} (${b.count})`),
           ...(r.ydayHit ? [`%Yesterday ≥ ${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)`] : []),
+          ...(r.emaHit ? [`${BAR_LABEL[r.emaHit.bar]||r.emaHit.bar} ${emaCrossLabel(r.emaHit.sig)}`] : []),
           ...(r.comboHits||[]).map(c => `${c.label} (${c.detail})`)
         ];
         return `${instLabel(r.inst)} [AND] ${parts.join(' & ')}`;
@@ -1870,6 +2008,7 @@ function renderScanResults(){
       const smaBadges = (r.smaHits||[]).map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} SMA ${b.dir==='above'?'≥':'≤'}${b.value} (${b.sma.toFixed(1)})</span>`).join('');
       const greenStreakBadges = (r.greenStreakHits||[]).map(b => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[b.bar]||b.bar} Streak ≥${b.length} (${b.count})</span>`).join('');
       const ydayBadge = r.ydayHit ? `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--gain); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">%Yday ≥${r.ydayHit.value}% (+${r.ydayHit.pct.toFixed(2)}%)</span>` : '';
+      const emaBadge = r.emaHit ? `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:${r.emaHit.sig.cross==='golden'?'var(--gain)':'var(--loss)'}; padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[r.emaHit.bar]||r.emaHit.bar} ${emaCrossLabel(r.emaHit.sig)}</span>` : '';
       const comboBadges = (r.comboHits||[]).map(c => `<span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber-2); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">${BAR_LABEL[scanConfig.comboBar]||scanConfig.comboBar} ${c.label}</span>`).join('');
       // |RSI-SMA(14)| diff was checked per RSI bar (same TF as that RSI condition), so show one
       // Δ line per bar that carried a diff value, alongside the threshold that was applied.
@@ -1881,10 +2020,22 @@ function renderScanResults(){
         <span class="sym">${instLabel(r.inst)} <span style="color:var(--text-faint); font-weight:400;">PERP</span></span>
         <div style="display:flex; flex-wrap:wrap; gap:4px;">
           <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:var(--amber); padding:1px 6px; border-radius:5px; letter-spacing:0.3px;">AND</span>
-          ${rsiBadges}${smaBadges}${greenStreakBadges}${ydayBadge}${comboBadges}
+          ${rsiBadges}${smaBadges}${greenStreakBadges}${ydayBadge}${emaBadge}${comboBadges}
         </div>
         <span class="px">${d?fmtPx(d.last):'—'}</span>
         ${diffLines}
+      </div>`;
+    }
+    if(r.type === 'emacross'){
+      const isGold = r.sig.cross === 'golden';
+      const col = isGold ? 'var(--gain)' : 'var(--loss)';
+      const when = r.sig.barsAgo === 0 ? 'now' : `${r.sig.barsAgo} bar${r.sig.barsAgo>1?'s':''} ago`;
+      return `<div class="scan-card" data-inst="${r.inst}" title="Open in OKX Futures">
+        <span class="sym">${instLabel(r.inst)} <span style="color:var(--text-faint); font-weight:400;">PERP</span></span>
+        <span class="tf-badge" style="font-family:var(--mono); font-size:10.5px; font-weight:700; color:var(--bg); background:${col}; padding:1px 6px; border-radius:5px; letter-spacing:0.3px; align-self:flex-start;">${BAR_LABEL[r.bar]||r.bar} · EMA${r.sig.fast}×${r.sig.slow}</span>
+        <span class="rsi" style="color:${col}; font-size:16px;">${isGold?'▲ Golden':'▼ Death'}</span>
+        <span class="px">${d?fmtPx(d.last):'—'}</span>
+        <span style="color:var(--text-faint); font-size:11px;">${when} · EMA${r.sig.fast} ${fmtPx(r.sig.emaF)} / EMA${r.sig.slow} ${fmtPx(r.sig.emaS)}</span>
       </div>`;
     }
     if(r.type === 'combo'){
@@ -2101,6 +2252,12 @@ function syncScanUI(){
   document.getElementById('scanSmaDiffValue').value = scanConfig.smaDiffValue != null ? scanConfig.smaDiffValue : 7;
   document.getElementById('scanYdayPctEnabled').checked = !!scanConfig.ydayPctEnabled;
   document.getElementById('scanYdayPctValue').value = scanConfig.ydayPctValue != null ? scanConfig.ydayPctValue : 20;
+  document.getElementById('scanEmaCrossEnabled').checked = !!scanConfig.emaCrossEnabled;
+  document.getElementById('scanEmaCrossBar').value = scanConfig.emaCrossBar || '1D';
+  document.getElementById('scanEmaFast').value = scanConfig.emaFast != null ? scanConfig.emaFast : 7;
+  document.getElementById('scanEmaSlow').value = scanConfig.emaSlow != null ? scanConfig.emaSlow : 30;
+  document.getElementById('scanEmaCrossDir').value = scanConfig.emaCrossDir || 'any';
+  document.getElementById('scanEmaCrossLookback').value = scanConfig.emaCrossLookback != null ? scanConfig.emaCrossLookback : 1;
   document.getElementById('scanComboBar').value = scanConfig.comboBar || '1D';
   document.getElementById('scanComboBreakoutLookback').value = scanConfig.comboBreakoutLookback != null ? scanConfig.comboBreakoutLookback : 20;
   document.getElementById('scanComboSqueeze').checked = !!scanConfig.comboSqueezeEnabled;
@@ -2117,6 +2274,18 @@ async function onScanConfigChange(){
   scanConfig.smaDiffValue = parseFloat(document.getElementById('scanSmaDiffValue').value) || 7;
   scanConfig.ydayPctEnabled = document.getElementById('scanYdayPctEnabled').checked;
   scanConfig.ydayPctValue = parseFloat(document.getElementById('scanYdayPctValue').value) || 20;
+  scanConfig.emaCrossEnabled = document.getElementById('scanEmaCrossEnabled').checked;
+  scanConfig.emaCrossBar = document.getElementById('scanEmaCrossBar').value;
+  let ef = parseInt(document.getElementById('scanEmaFast').value) || 7;
+  let es = parseInt(document.getElementById('scanEmaSlow').value) || 30;
+  ef = Math.max(2, ef); es = Math.max(ef+1, es); // slow must be longer than fast
+  scanConfig.emaFast = ef; scanConfig.emaSlow = es;
+  document.getElementById('scanEmaFast').value = ef; document.getElementById('scanEmaSlow').value = es;
+  scanConfig.emaCrossDir = document.getElementById('scanEmaCrossDir').value;
+  let elb = parseInt(document.getElementById('scanEmaCrossLookback').value) || 1;
+  elb = Math.min(10, Math.max(1, elb));
+  scanConfig.emaCrossLookback = elb;
+  document.getElementById('scanEmaCrossLookback').value = elb;
   scanConfig.comboBar = document.getElementById('scanComboBar').value;
   let lb = parseInt(document.getElementById('scanComboBreakoutLookback').value) || 20;
   lb = Math.min(20, Math.max(10, lb));
@@ -2149,7 +2318,7 @@ document.getElementById('scanBarGroup').addEventListener('click', e=>{
   scanArmed = {};
   saveScanConfig();
 });
-['scanEnabled','scanLimit','scanSmaDiffEnabled','scanSmaDiffDir','scanSmaDiffValue','scanYdayPctEnabled','scanYdayPctValue','scanComboBar','scanComboBreakoutLookback','scanComboSqueeze','scanComboRsiCross','scanComboStoch','scanComboVolSpike','scanComboBreakout'].forEach(id=>{
+['scanEnabled','scanLimit','scanSmaDiffEnabled','scanSmaDiffDir','scanSmaDiffValue','scanYdayPctEnabled','scanYdayPctValue','scanComboBar','scanComboBreakoutLookback','scanComboSqueeze','scanComboRsiCross','scanComboStoch','scanComboVolSpike','scanComboBreakout','scanEmaCrossEnabled','scanEmaCrossBar','scanEmaFast','scanEmaSlow','scanEmaCrossDir','scanEmaCrossLookback'].forEach(id=>{
   document.getElementById(id).addEventListener('change', onScanConfigChange);
 });
 document.getElementById('scanLogicGroup').addEventListener('click', e=>{
@@ -2161,6 +2330,20 @@ document.getElementById('scanLogicGroup').addEventListener('click', e=>{
   saveScanConfig();
 });
 document.getElementById('scanNowBtn').addEventListener('click', scanMarket);
+document.getElementById('scanStopBtn').addEventListener('click', async ()=>{
+  if(!scanning) return;
+  scanAbort = 'stop';
+  setScanStatus('Stopping… keeping results found so far');
+  // Stop also pauses the 10-minute auto-scan so it doesn't immediately start again
+  scanConfig.enabled = false;
+  document.getElementById('scanEnabled').checked = false;
+  await saveScanConfig();
+});
+document.getElementById('scanCancelBtn').addEventListener('click', ()=>{
+  if(!scanning) return;
+  scanAbort = 'cancel';
+  setScanStatus('Cancelling…');
+});
 
 window.addEventListener('resize', ()=>{ if(candles.length){ drawChart(); drawRSIChart(); drawStochChart(); } });
 
@@ -2186,8 +2369,8 @@ async function initApp(){
   setInterval(async ()=>{ await fetchFuturesTickers(); renderWatchlist(); if(isSwapInst(selected)) renderHero(); }, 15000);
   setInterval(loadCandles, 30000);
   setInterval(refreshDailyChanges, 60000);
-  // initial market scan, then keep scanning every 10 min if enabled
-  scanMarket();
+  // no automatic scan on open — the user starts it with the Scan button.
+  // If Auto-scan is ticked, it first runs 10 minutes after opening, then every 10 minutes.
   setInterval(()=>{ if(scanConfig.enabled) scanMarket(); }, 10*60*1000);
 }
 </script>
