@@ -343,6 +343,38 @@
       <span></span>
     </div>
     <div id="watchlist" style="display:flex; flex-direction:column; gap:1px;"></div>
+
+    <!-- Watchlist RSI alert -> Telegram -->
+    <div id="wlAlertBox" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:10px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+        <label style="display:flex; align-items:center; gap:7px; font-family:var(--mono); font-size:13.5px; font-weight:600; color:var(--amber); cursor:pointer;">
+          <input type="checkbox" id="wlAlertEnabled" style="accent-color:#E8B94D; width:15px; height:15px;">
+          RSI Alert → Telegram
+        </label>
+        <button id="wlAlertTestBtn" title="Send a test message to Telegram" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text-dim); font-family:var(--mono); font-size:12px; padding:5px 10px; border-radius:7px; cursor:pointer;">Test</button>
+      </div>
+      <div id="wlAlertRules" style="display:flex; flex-direction:column; gap:7px;"></div>
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+        <button id="wlAlertAddBtn" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:12.5px; padding:6px 11px; border-radius:7px; cursor:pointer;">+ Add rule</button>
+        <span id="wlAlertStatus" style="font-family:var(--mono); font-size:11.5px; color:var(--text-faint); text-align:right;"></span>
+      </div>
+      <div id="wlAlertLive" style="font-family:var(--mono); font-size:11.5px; color:var(--text-dim); line-height:1.7;"></div>
+      <details id="wlCloudBox" style="font-family:var(--mono); font-size:12.5px; color:var(--text-dim);">
+        <summary style="cursor:pointer;">☁ Run on Cloudflare Worker (works while this page is closed)</summary>
+        <div style="display:flex; flex-direction:column; gap:7px; margin-top:8px;">
+          <label style="display:flex; align-items:center; gap:7px; cursor:pointer;">
+            <input type="checkbox" id="wlCloudOn" style="accent-color:#E8B94D; width:15px; height:15px;"> Use the Worker for alerts (this page stops sending)
+          </label>
+          <input id="wlCloudUrl" placeholder="https://rsi-alert.YOUR-SUBDOMAIN.workers.dev" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:12.5px; width:100%; box-sizing:border-box;">
+          <input id="wlCloudKey" type="password" placeholder="API_KEY" autocomplete="off" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:12.5px; width:100%; box-sizing:border-box;">
+          <div style="display:flex; gap:7px; align-items:center;">
+            <button id="wlCloudSyncBtn" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:12px; padding:5px 10px; border-radius:7px; cursor:pointer;">Save &amp; sync</button>
+            <button id="wlCloudTestBtn" style="background:var(--panel-2); border:1px solid var(--border); color:var(--text); font-family:var(--mono); font-size:12px; padding:5px 10px; border-radius:7px; cursor:pointer;">Test Worker</button>
+            <span id="wlCloudStatus" style="font-size:11.5px; color:var(--text-faint);"></span>
+          </div>
+        </div>
+      </details>
+    </div>
   </div>
 
   <!-- Chart -->
@@ -2347,9 +2379,241 @@ document.getElementById('scanCancelBtn').addEventListener('click', ()=>{
 
 window.addEventListener('resize', ()=>{ if(candles.length){ drawChart(); drawRSIChart(); drawStochChart(); } });
 
+
+// ---------- Watchlist RSI alert -> Telegram ----------
+// Rules: [{bar:'1H', dir:'above'|'below', value:70}]. Every 60s the RSI(14) of each watchlist coin is
+// checked per rule (same RSI as the chart: current, still-forming candle). An alert is sent ONCE when the
+// RSI reaches the value; it re-arms only after RSI backs off by WL_REARM_GAP points, so it won't spam
+// while RSI hovers around the level. The first check after load/edit is a silent baseline.
+const WL_ALERT_KEY = 'wlAlert:v1';
+const WL_REARM_GAP = 2;
+const WL_CHECK_MS = 60*1000;
+let wlAlert = { enabled:false, rules:[{bar:'1H', dir:'above', value:70}] };
+let wlArm = {};          // key -> 'armed' | 'fired'
+let wlLive = {};         // ruleIdx -> { inst: rsi }
+let wlChecking = false;
+let wlLastCheck = null;
+let wlCloud = { on:false, url:'', key:'' };
+let wlCloudLastSent = '';
+
+async function loadWlAlert(){
+  try{
+    const r = await store.get(WL_ALERT_KEY);
+    if(r && r.value){
+      const v = JSON.parse(r.value);
+      if(v && Array.isArray(v.rules) && v.rules.length) wlAlert = { enabled:!!v.enabled, rules:v.rules };
+    }
+  }catch(e){}
+}
+async function saveWlAlert(){
+  try{ await store.set(WL_ALERT_KEY, JSON.stringify(wlAlert)); }catch(e){}
+  syncCloud();
+}
+
+// ----- Cloudflare Worker sync -----
+// The Worker has no browser: it needs the watchlist + rules pushed to it. We push whenever they change
+// (rule edits immediately, watchlist edits within a minute) and when the Worker switch is toggled.
+const wlCloudActive = ()=> !!(wlCloud.on && wlCloud.url && wlCloud.key);
+function setCloudStatus(t, bad){
+  const el = document.getElementById('wlCloudStatus');
+  el.textContent = t; el.style.color = bad ? 'var(--loss)' : 'var(--text-faint)';
+}
+async function saveWlCloud(){
+  try{ await store.set('wlCloud:v1', JSON.stringify(wlCloud)); }catch(e){}
+}
+async function loadWlCloud(){
+  try{
+    const r = await store.get('wlCloud:v1');
+    if(r && r.value) wlCloud = Object.assign(wlCloud, JSON.parse(r.value));
+  }catch(e){}
+  document.getElementById('wlCloudOn').checked = !!wlCloud.on;
+  document.getElementById('wlCloudUrl').value = wlCloud.url || '';
+  document.getElementById('wlCloudKey').value = wlCloud.key || '';
+  if(wlCloudActive()) document.getElementById('wlCloudBox').open = true;
+}
+async function cloudCall(path, body){
+  const res = await fetch(wlCloud.url.trim().replace(/\/+$/,'') + path, {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+wlCloud.key.trim()},
+    body: JSON.stringify(body || {})
+  });
+  if(!res.ok) throw new Error(res.status === 401 ? 'wrong API_KEY' : 'HTTP '+res.status);
+  return res.json();
+}
+async function syncCloud(force){
+  if(!wlCloud.url || !wlCloud.key) return false;
+  const body = { enabled: !!(wlAlert.enabled && wlCloud.on), watchlist: Array.from(new Set(watchlist)), rules: wlAlert.rules };
+  const sig = JSON.stringify(body);
+  if(!force && sig === wlCloudLastSent) return true;
+  try{
+    await cloudCall('/config', body);
+    wlCloudLastSent = sig;
+    setCloudStatus('synced ' + new Date().toLocaleTimeString('th-TH',{hour12:false}) + (body.enabled ? ' · Worker ON' : ' · Worker OFF'));
+    return true;
+  }catch(e){
+    setCloudStatus('sync failed: ' + (e.message||e), true);
+    return false;
+  }
+}
+
+function renderWlAlertUI(){
+  document.getElementById('wlAlertEnabled').checked = !!wlAlert.enabled;
+  const sel = 'background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:13px;';
+  const bars = ['5m','15m','1H','4H','1D','1W'];
+  document.getElementById('wlAlertRules').innerHTML = wlAlert.rules.map((r,i)=>`
+    <div style="display:flex; align-items:center; gap:6px;" data-i="${i}">
+      <span style="font-family:var(--mono); font-size:12.5px; color:var(--text-dim);">RSI</span>
+      <select data-f="bar" style="${sel}">${bars.map(b=>`<option value="${b}" ${b===r.bar?'selected':''}>${BAR_LABEL[b]||b}</option>`).join('')}</select>
+      <select data-f="dir" style="${sel}">
+        <option value="above" ${r.dir==='above'?'selected':''}>≥ (reaches / above)</option>
+        <option value="below" ${r.dir==='below'?'selected':''}>≤ (reaches / below)</option>
+      </select>
+      <input data-f="value" type="number" step="any" min="0" max="100" value="${r.value}" style="width:60px; ${sel}">
+      <span data-rmrule="${i}" title="Remove rule" style="cursor:pointer; color:var(--text-faint); padding:2px 6px;">✕</span>
+    </div>`).join('');
+  document.querySelectorAll('#wlAlertRules [data-f]').forEach(el=>{
+    el.addEventListener('change', async ()=>{
+      const i = parseInt(el.closest('[data-i]').dataset.i);
+      const f = el.dataset.f;
+      if(f==='value'){
+        let v = parseFloat(el.value);
+        if(!isFinite(v)) v = 70;
+        wlAlert.rules[i].value = Math.min(100, Math.max(0, v));
+        el.value = wlAlert.rules[i].value;
+      }else wlAlert.rules[i][f] = el.value;
+      wlArm = {}; wlLive = {};
+      await saveWlAlert();
+      checkWlAlerts();
+    });
+  });
+  document.querySelectorAll('#wlAlertRules [data-rmrule]').forEach(el=>{
+    el.addEventListener('click', async ()=>{
+      if(wlAlert.rules.length <= 1) return toast('Keep at least one rule');
+      wlAlert.rules.splice(parseInt(el.dataset.rmrule), 1);
+      wlArm = {}; wlLive = {};
+      await saveWlAlert();
+      renderWlAlertUI();
+    });
+  });
+  renderWlAlertLive();
+}
+
+function renderWlAlertLive(){
+  const st = document.getElementById('wlAlertStatus');
+  st.textContent = !wlAlert.enabled ? 'OFF' : (wlLastCheck ? 'checked ' + wlLastCheck.toLocaleTimeString('th-TH',{hour12:false}) : 'waiting for first check…');
+  document.getElementById('wlAlertLive').innerHTML = wlAlert.rules.map((r,i)=>{
+    const m = wlLive[i];
+    if(!m) return '';
+    const chips = watchlist.filter(inst=>m[inst]!=null).map(inst=>{
+      const v = m[inst];
+      const hit = r.dir==='above' ? v>=r.value : v<=r.value;
+      return `<span style="margin-right:10px; white-space:nowrap; ${hit?'color:var(--amber); font-weight:700;':''}">${instLabel(inst)} ${v.toFixed(1)}</span>`;
+    }).join('');
+    return chips ? `<div><span style="color:var(--text-faint);">${BAR_LABEL[r.bar]||r.bar}:</span> ${chips}</div>` : '';
+  }).join('');
+}
+
+async function checkWlAlerts(){
+  if(!wlAlert.enabled || wlChecking || !watchlist.length) { renderWlAlertLive(); return; }
+  wlChecking = true;
+  try{
+    const insts = Array.from(new Set(watchlist));
+    const hits = [];
+    // fetch each (coin, timeframe) once, in small batches to stay friendly to the OKX proxy routes
+    const bars = Array.from(new Set(wlAlert.rules.map(r=>r.bar)));
+    const jobs = [];
+    insts.forEach(inst => bars.forEach(bar => jobs.push({inst, bar})));
+    const rsiMap = {};
+    for(let k=0; k<jobs.length; k+=4){
+      await Promise.all(jobs.slice(k,k+4).map(async ({inst,bar})=>{
+        const arr = await getCandles(inst, bar, true);
+        if(!arr || arr.length < 15) return;
+        const rs = calcRSI(arr.map(c=>c.c), 14);
+        const v = rs[rs.length-1];
+        if(v != null) rsiMap[inst+'|'+bar] = v;
+      }));
+    }
+    wlLive = {};
+    wlAlert.rules.forEach((r,i)=>{
+      wlLive[i] = {};
+      insts.forEach(inst=>{
+        const v = rsiMap[inst+'|'+r.bar];
+        if(v == null) return;
+        wlLive[i][inst] = v;
+        const key = `${inst}|${r.bar}|${r.dir}|${r.value}`;
+        const cond = r.dir==='above' ? v >= r.value : v <= r.value;
+        const rearm = r.dir==='above' ? v <= r.value - WL_REARM_GAP : v >= r.value + WL_REARM_GAP;
+        const st = wlArm[key];
+        if(st === undefined){ wlArm[key] = cond ? 'fired' : 'armed'; return; }   // silent baseline
+        if(st === 'armed' && cond){ wlArm[key] = 'fired'; hits.push({inst, r, v}); }
+        else if(st === 'fired' && rearm){ wlArm[key] = 'armed'; }
+      });
+    });
+    wlLastCheck = new Date();
+    if(hits.length && !wlCloudActive()){   // when the Worker is active it sends the alerts instead
+      const lines = hits.map(h=>{
+        const q = getQuote(h.inst);
+        const px = q ? ` · ${fmtPx(q.last)}` : '';
+        return `${instLabel(h.inst)} (${BAR_LABEL[h.r.bar]||h.r.bar}) RSI ${h.v.toFixed(1)} ${h.r.dir==='above'?'≥':'≤'} ${h.r.value}${px}`;
+      });
+      sendTelegram(`🔔 Watchlist RSI alert\n${lines.join('\n')}`);
+      toast(`🔔 RSI alert: ${hits.map(h=>instLabel(h.inst)).join(', ')} — sent to Telegram`);
+      beep();
+    }
+  }catch(e){
+    console.error('wl alert check failed', e);
+  }finally{
+    wlChecking = false;
+    renderWlAlertLive();
+  }
+}
+
+document.getElementById('wlAlertEnabled').addEventListener('change', async e=>{
+  wlAlert.enabled = e.target.checked;
+  wlArm = {};
+  await saveWlAlert();
+  renderWlAlertLive();
+  if(wlAlert.enabled) checkWlAlerts();
+});
+document.getElementById('wlAlertAddBtn').addEventListener('click', async ()=>{
+  const last = wlAlert.rules[wlAlert.rules.length-1] || {bar:'1H', dir:'above', value:70};
+  wlAlert.rules.push({ bar:last.bar, dir: last.dir==='above'?'below':'above', value: last.dir==='above'?30:70 });
+  await saveWlAlert();
+  renderWlAlertUI();
+});
+document.getElementById('wlCloudOn').addEventListener('change', async e=>{
+  wlCloud.on = e.target.checked;
+  await saveWlCloud();
+  if(wlCloud.on && !(wlCloud.url && wlCloud.key)) setCloudStatus('enter Worker URL and API_KEY, then Save & sync', true);
+  else syncCloud(true);
+});
+document.getElementById('wlCloudSyncBtn').addEventListener('click', async ()=>{
+  wlCloud.url = document.getElementById('wlCloudUrl').value.trim();
+  wlCloud.key = document.getElementById('wlCloudKey').value.trim();
+  await saveWlCloud();
+  syncCloud(true);
+});
+document.getElementById('wlCloudTestBtn').addEventListener('click', async ()=>{
+  wlCloud.url = document.getElementById('wlCloudUrl').value.trim();
+  wlCloud.key = document.getElementById('wlCloudKey').value.trim();
+  if(!wlCloud.url || !wlCloud.key) return setCloudStatus('enter Worker URL and API_KEY first', true);
+  await saveWlCloud();
+  try{
+    const r = await cloudCall('/test');
+    setCloudStatus(r.ok ? 'test sent — check Telegram' : 'Worker could not reach Telegram (check BOT_TOKEN / CHAT_ID)', !r.ok);
+  }catch(e){ setCloudStatus('test failed: ' + (e.message||e), true); }
+});
+document.getElementById('wlAlertTestBtn').addEventListener('click', async ()=>{
+  await sendTelegram('✅ Test: Watchlist RSI alert is connected');
+  toast('Test message sent — check Telegram');
+});
+
 // ---------- init ----------
 async function initApp(){
   await loadState();
+  await loadWlAlert();
+  await loadWlCloud();
+  renderWlAlertUI();
   document.getElementById('chartSym').textContent = selected;
   renderWatchlist(); syncScanUI(); renderScanResults();
   document.getElementById('clearWatchlistBtn').addEventListener('click', async ()=>{
@@ -2369,6 +2633,10 @@ async function initApp(){
   setInterval(async ()=>{ await fetchFuturesTickers(); renderWatchlist(); if(isSwapInst(selected)) renderHero(); }, 15000);
   setInterval(loadCandles, 30000);
   setInterval(refreshDailyChanges, 60000);
+  setInterval(checkWlAlerts, WL_CHECK_MS);
+  setInterval(()=>syncCloud(), 60*1000);   // picks up watchlist add/remove
+  syncCloud();
+  checkWlAlerts();
   // no automatic scan on open — the user starts it with the Scan button.
   // If Auto-scan is ticked, it first runs 10 minutes after opening, then every 10 minutes.
   setInterval(()=>{ if(scanConfig.enabled) scanMarket(); }, 10*60*1000);
