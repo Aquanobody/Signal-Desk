@@ -2461,15 +2461,15 @@ function renderWlAlertUI(){
   const sel = 'background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:13px;';
   const bars = ['5m','15m','1H','4H','1D','1W'];
   document.getElementById('wlAlertRules').innerHTML = wlAlert.rules.map((r,i)=>`
-    <div style="display:flex; align-items:center; gap:6px;" data-i="${i}">
+    <div style="display:flex; align-items:center; gap:5px; min-width:0;" data-i="${i}">
       <span style="font-family:var(--mono); font-size:12.5px; color:var(--text-dim);">RSI</span>
-      <select data-f="bar" style="${sel}">${bars.map(b=>`<option value="${b}" ${b===r.bar?'selected':''}>${BAR_LABEL[b]||b}</option>`).join('')}</select>
-      <select data-f="dir" style="${sel}">
+      <select data-f="bar" style="${sel} min-width:0;">${bars.map(b=>`<option value="${b}" ${b===r.bar?'selected':''}>${BAR_LABEL[b]||b}</option>`).join('')}</select>
+      <select data-f="dir" style="${sel} flex:1; min-width:0;">
         <option value="above" ${r.dir==='above'?'selected':''}>≥ (reaches / above)</option>
         <option value="below" ${r.dir==='below'?'selected':''}>≤ (reaches / below)</option>
       </select>
-      <input data-f="value" type="number" step="any" min="0" max="100" value="${r.value}" style="width:60px; ${sel}">
-      <span data-rmrule="${i}" title="Remove rule" style="cursor:pointer; color:var(--text-faint); padding:2px 6px;">✕</span>
+      <input data-f="value" type="number" step="any" min="0" max="100" value="${r.value}" style="width:52px; flex-shrink:0; ${sel}">
+      <span data-rmrule="${i}" title="Remove rule" style="flex-shrink:0; cursor:pointer; color:var(--text-dim); font-size:14px; line-height:1; padding:6px 7px; border:1px solid var(--border); border-radius:7px;">✕</span>
     </div>`).join('');
   document.querySelectorAll('#wlAlertRules [data-f]').forEach(el=>{
     el.addEventListener('change', async ()=>{
@@ -2600,7 +2600,7 @@ document.getElementById('wlCloudTestBtn').addEventListener('click', async ()=>{
   await saveWlCloud();
   try{
     const r = await cloudCall('/test');
-    setCloudStatus(r.ok ? 'test sent — check Telegram' : 'Worker could not reach Telegram (check BOT_TOKEN / CHAT_ID)', !r.ok);
+    setCloudStatus(r.ok ? 'test sent — check Telegram' : 'Telegram failed: ' + (r.detail || 'unknown'), !r.ok);
   }catch(e){ setCloudStatus('test failed: ' + (e.message||e), true); }
 });
 document.getElementById('wlAlertTestBtn').addEventListener('click', async ()=>{
