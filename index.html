@@ -2482,9 +2482,9 @@ function renderWlAlertUI(){
       <select data-f="inst" title="Coin this rule applies to" style="${sel} width:84px; flex-shrink:0; min-width:0;">${coinOpts(r.inst)}</select>
       <span style="font-family:var(--mono); font-size:12.5px; color:var(--text-dim);">RSI</span>
       <select data-f="bar" style="${sel} min-width:0;">${bars.map(b=>`<option value="${b}" ${b===r.bar?'selected':''}>${BAR_LABEL[b]||b}</option>`).join('')}</select>
-      <select data-f="dir" style="${sel} flex:1; min-width:0;">
-        <option value="above" ${r.dir==='above'?'selected':''}>≥ above</option>
-        <option value="below" ${r.dir==='below'?'selected':''}>≤ below</option>
+      <select data-f="dir" title="≥ above / ≤ below" style="${sel} flex:1; min-width:0;">
+        <option value="above" ${r.dir==='above'?'selected':''}>≥</option>
+        <option value="below" ${r.dir==='below'?'selected':''}>≤</option>
       </select>
       <input data-f="value" type="number" step="any" min="0" max="100" value="${r.value}" style="width:52px; flex-shrink:0; ${sel}">
       <span data-rmrule="${i}" title="Remove rule" style="flex-shrink:0; cursor:pointer; color:var(--text-dim); font-size:14px; line-height:1; padding:6px 7px; border:1px solid var(--border); border-radius:7px;">✕</span>
