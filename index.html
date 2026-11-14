@@ -1190,6 +1190,7 @@ function setConn(ok){
 }
 
 function renderWatchlist(){
+  try{ syncWlRuleCoins(); }catch(e){}
   const el = document.getElementById('watchlist');
   if(watchlist.length===0){ el.innerHTML = '<div class="empty">No coins in the list yet</div>'; return; }
   el.innerHTML = watchlist.map(inst=>{
@@ -2456,17 +2457,34 @@ async function syncCloud(force){
   }
 }
 
+const ruleApplies = (r, inst)=> !r.inst || r.inst === inst;   // r.inst '' / missing = all coins
+function coinOpts(cur){
+  const list = Array.from(new Set(watchlist));
+  if(cur && !list.includes(cur)) list.push(cur);   // keep a rule's coin even if it left the watchlist
+  return `<option value="" ${!cur?'selected':''}>All</option>` +
+    list.map(i=>`<option value="${i}" ${i===cur?'selected':''}>${instLabel(i)}</option>`).join('');
+}
+let wlRuleCoinSig = '';
+function syncWlRuleCoins(){   // refresh the coin dropdowns only when the watchlist actually changed
+  const sig = watchlist.join(',');
+  if(sig === wlRuleCoinSig) return;
+  wlRuleCoinSig = sig;
+  try{ renderWlAlertUI(); }catch(e){}
+}
+
 function renderWlAlertUI(){
+  wlRuleCoinSig = watchlist.join(',');
   document.getElementById('wlAlertEnabled').checked = !!wlAlert.enabled;
   const sel = 'background:var(--panel-2); border:1px solid var(--border); color:var(--text); padding:6px 8px; border-radius:7px; font-family:var(--mono); font-size:13px;';
   const bars = ['5m','15m','1H','4H','1D','1W'];
   document.getElementById('wlAlertRules').innerHTML = wlAlert.rules.map((r,i)=>`
     <div style="display:flex; align-items:center; gap:5px; min-width:0;" data-i="${i}">
+      <select data-f="inst" title="Coin this rule applies to" style="${sel} width:84px; flex-shrink:0; min-width:0;">${coinOpts(r.inst)}</select>
       <span style="font-family:var(--mono); font-size:12.5px; color:var(--text-dim);">RSI</span>
       <select data-f="bar" style="${sel} min-width:0;">${bars.map(b=>`<option value="${b}" ${b===r.bar?'selected':''}>${BAR_LABEL[b]||b}</option>`).join('')}</select>
       <select data-f="dir" style="${sel} flex:1; min-width:0;">
-        <option value="above" ${r.dir==='above'?'selected':''}>≥ (reaches / above)</option>
-        <option value="below" ${r.dir==='below'?'selected':''}>≤ (reaches / below)</option>
+        <option value="above" ${r.dir==='above'?'selected':''}>≥ above</option>
+        <option value="below" ${r.dir==='below'?'selected':''}>≤ below</option>
       </select>
       <input data-f="value" type="number" step="any" min="0" max="100" value="${r.value}" style="width:52px; flex-shrink:0; ${sel}">
       <span data-rmrule="${i}" title="Remove rule" style="flex-shrink:0; cursor:pointer; color:var(--text-dim); font-size:14px; line-height:1; padding:6px 7px; border:1px solid var(--border); border-radius:7px;">✕</span>
@@ -2520,9 +2538,13 @@ async function checkWlAlerts(){
     const insts = Array.from(new Set(watchlist));
     const hits = [];
     // fetch each (coin, timeframe) once, in small batches to stay friendly to the OKX proxy routes
-    const bars = Array.from(new Set(wlAlert.rules.map(r=>r.bar)));
+    const jobSet = new Set();
     const jobs = [];
-    insts.forEach(inst => bars.forEach(bar => jobs.push({inst, bar})));
+    wlAlert.rules.forEach(r => insts.forEach(inst => {
+      if(!ruleApplies(r, inst)) return;
+      const k = inst+'|'+r.bar;
+      if(!jobSet.has(k)){ jobSet.add(k); jobs.push({inst, bar:r.bar}); }
+    }));
     const rsiMap = {};
     for(let k=0; k<jobs.length; k+=4){
       await Promise.all(jobs.slice(k,k+4).map(async ({inst,bar})=>{
@@ -2537,6 +2559,7 @@ async function checkWlAlerts(){
     wlAlert.rules.forEach((r,i)=>{
       wlLive[i] = {};
       insts.forEach(inst=>{
+        if(!ruleApplies(r, inst)) return;
         const v = rsiMap[inst+'|'+r.bar];
         if(v == null) return;
         wlLive[i][inst] = v;
@@ -2577,7 +2600,7 @@ document.getElementById('wlAlertEnabled').addEventListener('change', async e=>{
 });
 document.getElementById('wlAlertAddBtn').addEventListener('click', async ()=>{
   const last = wlAlert.rules[wlAlert.rules.length-1] || {bar:'1H', dir:'above', value:70};
-  wlAlert.rules.push({ bar:last.bar, dir: last.dir==='above'?'below':'above', value: last.dir==='above'?30:70 });
+  wlAlert.rules.push({ inst: (typeof selected!=='undefined' && watchlist.includes(selected)) ? selected : '', bar:last.bar, dir: last.dir==='above'?'below':'above', value: last.dir==='above'?30:70 });
   await saveWlAlert();
   renderWlAlertUI();
 });
